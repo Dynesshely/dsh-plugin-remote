@@ -1,0 +1,366 @@
+@import 'tailwindcss';
+
+/* Never scan the build output: a class that survives only in `dist` would otherwise be re-detected
+   and re-emitted by every later build. */
+@source not "../../dist";
+
+/* Class-based dark mode: the shell toggles `.dark` on <html> and can follow the system setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* A landscape phone is wider than `sm` but narrower than `md`, and it should get the two-pane
+   layout, so `wide` is the breakpoint that decides that. */
+@theme {
+  --breakpoint-wide: 44rem;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --ease-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+
+@keyframes rc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes rc-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes rc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+@keyframes rc-drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(7%, -9%, 0) scale(1.14);
+  }
+  66% {
+    transform: translate3d(-5%, 7%, 0) scale(0.94);
+  }
+}
+@keyframes rc-drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.05);
+  }
+  40% {
+    transform: translate3d(-9%, 6%, 0) scale(0.9);
+  }
+  70% {
+    transform: translate3d(5%, -8%, 0) scale(1.18);
+  }
+}
+@keyframes rc-drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.96);
+  }
+  30% {
+    transform: translate3d(4%, 10%, 0) scale(1.16);
+  }
+  65% {
+    transform: translate3d(-8%, -5%, 0) scale(1.02);
+  }
+}
+@keyframes rc-hue {
+  0%,
+  100% {
+    filter: hue-rotate(0deg) saturate(100%);
+  }
+  50% {
+    filter: hue-rotate(34deg) saturate(125%);
+  }
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* The shell is pinned to the viewport, so a mobile URL bar cannot scroll the page away and only
+   the transcript itself scrolls. */
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+body {
+  @apply bg-zinc-100 text-zinc-900 antialiased dark:bg-[#07080c] dark:text-zinc-100;
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Scrollbars stay unobtrusive on both platforms. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(113 113 122 / 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(113 113 122 / 0.35);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(113 113 122 / 0.55);
+}
+
+/* Everything below lives in the components layer, so a utility class such as `pl-8` always wins
+   over a component's own padding. */
+@layer components {
+  /* -------------------------------------------------------------- liquid glass */
+
+  .glass {
+    @apply border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
+      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
+      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+  }
+  .glass-soft {
+    @apply border border-white/50 bg-white/40 backdrop-blur-xl backdrop-saturate-150
+      dark:border-white/[0.08] dark:bg-white/[0.04];
+  }
+  .card {
+    @apply rounded-2xl border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
+      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
+      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+  }
+  .panel {
+    @apply rounded-3xl border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
+      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
+      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+  }
+  /* Sidebar, header and composer share one radius (18px), and the brand tile matches it too. */
+  .panel-tight {
+    @apply rounded-[18px] border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
+      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
+      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+  }
+  .brand-tile {
+    @apply inline-block shrink-0 overflow-hidden rounded-[10px] ring-1 ring-white/60 dark:ring-white/10;
+  }
+
+  /* -------------------------------------------------------------- controls */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/60 bg-white/60
+      px-3 py-1.5 text-sm text-zinc-700 shadow-[0_2px_10px_-6px_rgb(15_23_42/0.3)] backdrop-blur-xl
+      transition-all duration-200 hover:-translate-y-px hover:bg-white/80 active:translate-y-0
+      disabled:translate-y-0 disabled:opacity-40 disabled:hover:bg-white/60 dark:border-white/10
+      dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.12];
+  }
+  .btn-primary {
+    @apply border-transparent bg-gradient-to-b from-blue-500 to-blue-600 text-white
+      shadow-[0_6px_20px_-8px_rgb(37_99_235/0.8)] hover:from-blue-400 hover:to-blue-500
+      dark:from-blue-500 dark:to-blue-600;
+  }
+  .btn-danger {
+    @apply border-transparent bg-gradient-to-b from-rose-500 to-rose-600 text-white
+      shadow-[0_6px_20px_-8px_rgb(225_29_72/0.8)] hover:from-rose-400 hover:to-rose-500;
+  }
+  .chip {
+    @apply inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50
+      px-2.5 py-1 text-xs text-zinc-600 backdrop-blur-xl transition-all duration-200 hover:bg-white/80
+      dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.12];
+  }
+  .chip-strong {
+    @apply border-blue-400/60 bg-blue-50/70 text-blue-700 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200;
+  }
+  /* Toolbar control with the height every button in the chrome shares (36px). */
+  .control {
+    @apply inline-flex h-9 max-w-full items-center gap-1.5 rounded-xl border border-white/60 bg-white/50
+      px-3 text-[13px] text-zinc-600 backdrop-blur-xl transition-all duration-200
+      hover:-translate-y-px hover:bg-white/80 active:translate-y-0 disabled:translate-y-0
+      disabled:opacity-40 disabled:hover:bg-white/50 dark:border-white/10 dark:bg-white/[0.06]
+      dark:text-zinc-300 dark:hover:bg-white/[0.12];
+  }
+  .field {
+    @apply w-full rounded-xl border border-white/60 bg-white/60 px-3 py-2 text-sm text-zinc-800
+      shadow-inner outline-none backdrop-blur-xl transition-colors placeholder:text-zinc-400
+      focus:border-blue-400/80 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-100;
+  }
+  .icon-btn {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/60 bg-white/50
+      text-zinc-600 backdrop-blur-xl transition-all duration-200 hover:-translate-y-px hover:bg-white/80
+      active:translate-y-0 disabled:opacity-40 disabled:hover:bg-white/50 dark:border-white/10
+      dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.12];
+  }
+
+  /* -------------------------------------------------------------- motion */
+
+  .rise {
+    animation: rc-rise 0.28s var(--ease-spring) both;
+  }
+  .pop {
+    animation: rc-pop 0.16s ease-out both;
+  }
+  .pulse {
+    animation: rc-pulse 1.4s ease-in-out infinite;
+  }
+  .drift-a {
+    animation: rc-drift-a 17s ease-in-out infinite;
+  }
+  .drift-b {
+    animation: rc-drift-b 23s ease-in-out infinite;
+  }
+  .drift-c {
+    animation: rc-drift-c 29s ease-in-out infinite;
+  }
+  .drift-hue {
+    animation: rc-hue 41s linear infinite;
+  }
+
+  /* -------------------------------------------------------------- code highlighting */
+
+  /* highlight.js token colours. The library ships its tokenising and the `hljs-*` class names; the
+     palette lives here so it follows the page's own light/dark theme and glass surfaces instead of
+     dragging in a separate third-party stylesheet. */
+  .hljs {
+    @apply bg-transparent text-inherit;
+  }
+  .hljs-comment,
+  .hljs-quote {
+    @apply text-zinc-400 italic dark:text-zinc-500;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-doctag,
+  .hljs-name,
+  .hljs-meta .hljs-keyword {
+    @apply text-fuchsia-600 dark:text-fuchsia-400;
+  }
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition,
+  .hljs-attribute,
+  .hljs-meta .hljs-string {
+    @apply text-emerald-700 dark:text-emerald-300;
+  }
+  .hljs-number,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-link,
+  .hljs-selector-attr {
+    @apply text-amber-700 dark:text-amber-300;
+  }
+  .hljs-attr,
+  .hljs-property,
+  .hljs-selector-class,
+  .hljs-selector-id,
+  .hljs-selector-pseudo {
+    @apply text-sky-700 dark:text-sky-300;
+  }
+  .hljs-title,
+  .hljs-title.class_,
+  .hljs-title.function_,
+  .hljs-section,
+  .hljs-built_in,
+  .hljs-type,
+  .hljs-params {
+    @apply text-violet-700 dark:text-violet-300;
+  }
+  .hljs-meta,
+  .hljs-punctuation,
+  .hljs-operator,
+  .hljs-subst {
+    @apply text-zinc-500 dark:text-zinc-400;
+  }
+  .hljs-deletion {
+    @apply text-rose-600 dark:text-rose-400;
+  }
+  .hljs-emphasis {
+    @apply italic;
+  }
+  .hljs-strong {
+    @apply font-semibold;
+  }
+
+  /* -------------------------------------------------------------- markdown */
+
+  .md {
+    @apply text-[15px] leading-relaxed;
+  }
+  .md > * + * {
+    @apply mt-3;
+  }
+  .md h1,
+  .md h2,
+  .md h3 {
+    @apply mt-4 text-base font-semibold;
+  }
+  .md ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+  .md ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+  .md a {
+    @apply text-blue-600 underline decoration-blue-400/50 underline-offset-2 dark:text-blue-400;
+  }
+  .md code {
+    @apply rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 font-mono text-[13px] dark:bg-white/10;
+  }
+  .md pre {
+    @apply overflow-x-auto rounded-xl border border-white/60 bg-white/50 p-3 backdrop-blur-xl
+      dark:border-white/10 dark:bg-black/30;
+  }
+  .md pre code {
+    @apply bg-transparent p-0 text-[13px] leading-snug;
+  }
+  .md blockquote {
+    @apply border-l-2 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-600 dark:text-zinc-400;
+  }
+  .md table {
+    @apply block w-full overflow-x-auto text-sm;
+  }
+  .md th,
+  .md td {
+    @apply border border-zinc-200/70 px-2 py-1 text-left dark:border-white/10;
+  }
+  .md img {
+    @apply max-w-full rounded-xl;
+  }
+  .md hr {
+    @apply border-zinc-200/70 dark:border-white/10;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .pop,
+  .pulse,
+  .drift-a,
+  .drift-b,
+  .drift-c,
+  .drift-hue {
+    animation: none !important;
+  }
+}
