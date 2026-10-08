@@ -1,0 +1,9 @@
+# Keep LF in the repository and in every checkout, whatever core.autocrlf says — the sources are
+# shared between Windows and the browser build, and CRLF churn makes diffs unreadable.
+* text=auto eol=lf
+
+# Binary assets must never be normalised.
+*.png binary
+*.ico binary
+*.jpg binary
+*.webp binary
