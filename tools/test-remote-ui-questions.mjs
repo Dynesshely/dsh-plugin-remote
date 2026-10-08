@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   allAnswered,
   answerOf,
+  initialDraft,
   isAnswered,
   normalizeQuestions,
   parseQuestionArgs,
@@ -142,6 +143,16 @@ check('an ordinary tool call carries no questions', () => {
   const [item] = transcriptItems.value
   assert.deepEqual(item.questions, [])
   assert.deepEqual(item.answers, [])
+})
+
+check('the recommended first option starts pre-selected', () => {
+  const [single, multi] = parseQuestionArgs('ask_user_question', ARGS)
+  assert.deepEqual(initialDraft(single), { id: 'scope', selected: ['只改 UI'], custom: '' })
+  assert.deepEqual(initialDraft(multi), { id: 'targets', selected: [], custom: '' }, 'no marker, no draft')
+  const late = normalizeQuestions([
+    { id: 'x', question: 'q', options: [{ label: 'A' }, { label: 'B（Recommended）' }] },
+  ])[0]
+  assert.deepEqual(initialDraft(late).selected, [], 'only the first option counts, like the Desktop')
 })
 
 if (failures === 0) {

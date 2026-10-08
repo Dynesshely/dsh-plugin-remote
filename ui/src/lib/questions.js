@@ -116,6 +116,23 @@ export function parseQuestionResult (result) {
 }
 
 /**
+ * The draft a question starts with.
+ *
+ * A marked first option is pre-selected, mirroring the Desktop's `recommendedFirstOption`: the marker
+ * means "this is the recommended answer", not merely a label suffix. Only the first option counts.
+ * @param question - a normalized question.
+ * @returns `{ id, selected, custom }`.
+ */
+export function initialDraft (question) {
+  const first = (question?.options ?? [])[0]
+  return {
+    id: String(question?.id ?? ''),
+    selected: first?.recommended === true ? [first.label] : [],
+    custom: '',
+  }
+}
+
+/**
  * @param answers - parsed answers.
  * @param id - question id.
  * @returns the answer for that question, or undefined.

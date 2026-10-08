@@ -45,6 +45,7 @@
     1. **必须 `prepend`**。提问与审批是 waterfall，而 Cordis 的语义是「outermost-first，且**不调用 `next()` 的监听器会否决链上其余监听器**」（原话：*a listener that does not call `next()` vetoes the rest of the chain*）。桌面端 answerer 先注册、拿到用户答案后直接返回而不调 `next()`，于是任何**追加**在它后面的观察者永远不会被调用——实测表现就是 `/api/diagnose` 计数全为 0、页面卡片只读。现在四个注册（提问/审批 × 逐 agent/根）都用 `{ prepend: true }` 插到链首，记录完再 `next()`，桌面面板依旧权威。
     2. **不能只靠 `agent/created`**。这类事件按 Agent 作用域派发（`dsh-scope` 的 invariant 用 `args[0].agent` 取路由键），而桌面启动时会先恢复你正在看的会话，**它的 agent 早于 profile bundle 加载完成就已存在**，`agent/created` 不会再为它触发。所以加载时还要用 `ctx.get('agents').list()` **枚举已存在的 agent 并逐个挂载**，另在本插件（无作用域标签）的上下文上再挂一份兜底（无标签监听器对所有作用域派发都被接纳）。三条路按 callId 幂等去重，`GET /api/diagnose` 可核对计数与已挂载的 agent。
   - 交互与桌面一致：单选点一下即选中并自动跳到下一个问题，多选是切换；Enter 提交；未答完时提交按钮禁用并把焦点跳回缺答的那一题。
+  - **`(Recommended)` 标记**：桌面端的用途不是显示徽标，而是 `recommendedFirstOption` —— **把第一个被标记的选项预选为草稿**（用户仍需提交）。这里照做（`initialDraft`），并额外在该选项旁显示一个「推荐」chip 说明它为什么一开始就是选中态。
 - **审批**：只展示不代答（见下）。
 
 ### 重新构建 UI

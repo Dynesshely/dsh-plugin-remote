@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { answerOf, normalizeQuestions } from '../lib/questions.js'
+import { answerOf, initialDraft, normalizeQuestions } from '../lib/questions.js'
 import { answerQuestion } from '../lib/store.js'
 import AppIcon from './AppIcon.vue'
 
@@ -27,7 +27,7 @@ const props = defineProps({
 
 const model = computed(() => normalizeQuestions(props.questions))
 /** Local drafts, one per question: this device's in-progress answer. */
-const drafts = ref(model.value.map((question) => ({ id: question.id, selected: [], custom: '' })))
+const drafts = ref(model.value.map(initialDraft))
 const index = ref(0)
 const busy = ref(false)
 const error = ref('')
@@ -38,7 +38,7 @@ const readOnly = computed(() => props.callId === '' || submitted.value)
 const current = computed(() => model.value[index.value])
 
 watch(() => model.value.map((question) => question.id).join('|'), () => {
-  drafts.value = model.value.map((question) => ({ id: question.id, selected: [], custom: '' }))
+  drafts.value = model.value.map(initialDraft)
   index.value = 0
 })
 
