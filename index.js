@@ -501,6 +501,24 @@ export function apply (ctx, config) {
       return
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/diagnose') {
+      // Why a question cannot be answered remotely is nearly always an attachment problem, so the
+      // capture counters and the live agent ids are exposed instead of guessing from the UI.
+      const agents = ctx.get('agents')
+      json(200, {
+        capture: { ...capture, attached: [...capture.attached] },
+        liveAgents: (agents?.list?.() ?? []).map((agent) => String(agent.id)),
+        questions: [...questions.values()].map((record) => ({
+          callId: record.callId,
+          sessionId: record.sessionId,
+          answerable: record.answerable === true,
+          count: record.questions.length,
+        })),
+        approvals: [...approvals.values()].map((record) => record.key),
+      })
+      return
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/state') {
       try {
         const [sessions, workspaces] = await Promise.all([sessionsOf(ctx), workspacesOf(ctx)])
@@ -896,75 +914,138 @@ export function apply (ctx, config) {
     })
   }, 'remote-control: listener')
 
-  // Pending interactions are scoped to an Agent, so they are observed on each agent's own context.
+  // Pending interactions are dispatched on the requesting Agent's scope. They are observed in two
+  // ways: per-agent listeners on `agent.ctx` (the documented placement) and, as a safety net, on
+  // this plugin's own context — an untagged listener is admitted for every scoped dispatch, so the
+  // second registration also covers a request whose agent was never announced.
   const agentDisposers = new Map()
+  const capture = { attached: [], agentCreated: 0, rootQuestions: 0, missingWait: 0 }
   ctx.effect(() => {
-    const onCreated = ({ agent }) => {
-      const disposers = []
-      disposers.push(agent.ctx.on('user-questions/request', (request, next) => {
-        const callId = request?.wait?.callId
-        if (callId !== undefined) {
-          questions.set(String(callId), {
-            callId: String(callId),
-            sessionId: String(agent.id),
-            questions: (request.questions ?? []).map((item) => ({
-              id: String(item.id),
-              question: String(item.question ?? ''),
-              header: typeof item.header === 'string' ? item.header : undefined,
-              detail: typeof item.detail === 'string' ? item.detail : undefined,
-              multiSelect: item.multiSelect === true,
-              options: Array.isArray(item.options)
-                ? item.options.map((option) => ({ label: String(option.label ?? ''), description: option.description }))
-                : [],
-            })),
-            at: Date.now(),
-            agent,
-          })
-          broadcast('pending', pendingPayload())
-        }
-        return next()
-      }))
-      disposers.push(agent.ctx.on('approval/request', (request, next) => {
-        const key = `${String(agent.id)}:${String(request?.callId ?? request?.toolName ?? 'approval')}`
-        approvals.set(key, {
-          key,
-          sessionId: String(agent.id),
-          toolName: String(request?.toolName ?? 'tool'),
-          reason: typeof request?.reason === 'string' ? request.reason : undefined,
-          at: Date.now(),
-        })
-        broadcast('pending', pendingPayload())
-        // Observed only: the decision chain stays with the desktop answerer.
-        return next()
-      }))
-      agentDisposers.set(agent, disposers)
+    /**
+     * Record one question request, keyed by the tool call its answer must go back to.
+     * @param agent - the requesting agent, when the dispatch carried one.
+     * @param request - the `user-questions/request` payload.
+     */
+    const recordQuestion = (agent, request) => {
+      const callId = request?.wait?.callId
+      if (callId === undefined) {
+        // Without the tool-call id an answer cannot be routed, so only a counter is kept for
+        // diagnosis; the desktop panel can still answer that question.
+        capture.missingWait += 1
+        return
+      }
+      const owner = agent ?? request?.agent
+      questions.set(String(callId), {
+        callId: String(callId),
+        sessionId: String(owner?.id ?? ''),
+        questions: (request.questions ?? []).map((item) => ({
+          id: String(item.id),
+          question: String(item.question ?? ''),
+          header: typeof item.header === 'string' ? item.header : undefined,
+          detail: typeof item.detail === 'string' ? item.detail : undefined,
+          multiSelect: item.multiSelect === true,
+          options: Array.isArray(item.options)
+            ? item.options.map((option) => ({ label: String(option.label ?? ''), description: option.description }))
+            : [],
+        })),
+        at: Date.now(),
+        agent: owner,
+        answerable: owner !== undefined,
+      })
+      broadcast('pending', pendingPayload())
     }
-    const onDisposed = ({ agent }) => {
-      for (const dispose of agentDisposers.get(agent) ?? []) {
+
+    /**
+     * Record one approval request, which the remote side only reports.
+     * @param agent - the requesting agent.
+     * @param request - the `approval/request` payload.
+     */
+    const recordApproval = (agent, request) => {
+      const sessionId = String((agent ?? request?.agent)?.id ?? '')
+      const key = `${sessionId}:${String(request?.callId ?? request?.toolName ?? 'approval')}`
+      approvals.set(key, {
+        key,
+        sessionId,
+        toolName: String(request?.toolName ?? 'tool'),
+        reason: typeof request?.reason === 'string' ? request.reason : undefined,
+        at: Date.now(),
+      })
+      broadcast('pending', pendingPayload())
+    }
+
+    /**
+     * Subscribe to one live agent, exactly once.
+     * @param agent - a live agent handle.
+     */
+    const attach = (agent) => {
+      if (agent === null || agent === undefined) return
+      const id = String(agent.id)
+      if (agentDisposers.has(id)) return
+      try {
+        const disposers = [
+          agent.ctx.on('user-questions/request', (request, next) => {
+            recordQuestion(agent, request)
+            return next()
+          }),
+          // Observed only: the decision chain stays with the desktop answerer.
+          agent.ctx.on('approval/request', (request, next) => {
+            recordApproval(agent, request)
+            return next()
+          }),
+        ]
+        agentDisposers.set(id, disposers)
+        capture.attached.push(id)
+      } catch (error) {
+        ctx.logger.warn(`[remote-control] could not observe agent ${id}: ${String(error?.message ?? error)}`)
+      }
+    }
+
+    // A Session that is already running when this plugin loads — the desktop reopens its active
+    // Session during startup, before the profile's bundles finish applying — never emits
+    // `agent/created` again, so live agents are attached explicitly. Without this, a question asked
+    // in the Session the user is actually looking at is never captured.
+    const agents = ctx.get('agents')
+    for (const agent of agents?.list?.() ?? []) attach(agent)
+
+    const offCreated = ctx.on('agent/created', ({ agent }) => {
+      capture.agentCreated += 1
+      attach(agent)
+    })
+    const offDisposed = ctx.on('agent/disposed', ({ agent }) => {
+      const id = String(agent?.id ?? '')
+      for (const dispose of agentDisposers.get(id) ?? []) {
         try {
           dispose()
         } catch {
           /* already released */
         }
       }
-      agentDisposers.delete(agent)
+      agentDisposers.delete(id)
       let changed = false
       for (const [callId, record] of [...questions]) {
-        if (String(record.sessionId) === String(agent.id)) {
+        if (String(record.sessionId) === id) {
           questions.delete(callId)
           changed = true
         }
       }
       for (const [key, record] of [...approvals]) {
-        if (String(record.sessionId) === String(agent.id)) {
+        if (String(record.sessionId) === id) {
           approvals.delete(key)
           changed = true
         }
       }
       if (changed) broadcast('pending', pendingPayload())
-    }
-    const offCreated = ctx.on('agent/created', onCreated)
-    const offDisposed = ctx.on('agent/disposed', onDisposed)
+    })
+    const offRootQuestions = ctx.on('user-questions/request', (request, next) => {
+      capture.rootQuestions += 1
+      recordQuestion(request?.agent, request)
+      return next()
+    })
+    // Observed only, like the per-agent registration.
+    const offRootApprovals = ctx.on('approval/request', (request, next) => {
+      recordApproval(request?.agent, request)
+      return next()
+    })
     const offStatus = ctx.on('api-session/status', () => {
       void sessionsOf(ctx).then((sessions) => {
         broadcast('sessions', { sessions })
@@ -973,6 +1054,8 @@ export function apply (ctx, config) {
     return () => {
       offCreated()
       offDisposed()
+      offRootQuestions()
+      offRootApprovals()
       offStatus()
       for (const disposers of agentDisposers.values()) {
         for (const dispose of disposers) {
@@ -984,6 +1067,7 @@ export function apply (ctx, config) {
         }
       }
       agentDisposers.clear()
+      capture.attached.length = 0
       questions.clear()
       approvals.clear()
     }

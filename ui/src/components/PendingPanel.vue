@@ -22,7 +22,8 @@ import AppIcon from './AppIcon.vue'
       :key="question.callId"
       class="rise"
       :questions="question.questions"
-      :call-id="question.callId"
+      :call-id="question.answerable === false ? '' : question.callId"
+      :eyebrow="question.answerable === false ? '提问 · 只能在桌面端作答' : '提问'"
       :elsewhere="question.sessionId !== state.selected"
     />
 
