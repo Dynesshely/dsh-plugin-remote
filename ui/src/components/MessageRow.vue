@@ -3,6 +3,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { renderMarkdown } from '../lib/markdown.js'
 import { attachmentImage, ensureAttachmentImage, state } from '../lib/store.js'
 import ToolCard from './ToolCard.vue'
+import QuestionCard from './QuestionCard.vue'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps({ item: { type: Object, required: true } })
@@ -28,6 +29,12 @@ watchEffect(() => {
 /** @returns the cached data URL for one image, or '' while it loads. */
 function srcOf (image) {
   return attachmentImage(state.selected, image.attachmentId)
+}
+
+/** @returns the call id while that question is still pending, otherwise '' (a read-only card). */
+function pendingCallId (item) {
+  if (item.result !== undefined) return ''
+  return state.pending.questions.some((record) => record.callId === item.callId) ? item.callId : ''
 }
 
 /** @returns how many calls in a group failed, and whether any is still running. */
@@ -169,6 +176,15 @@ const groupState = computed(() => {
       <ToolCard v-for="entry in item.items" :key="entry.key" :item="entry" />
     </div>
   </div>
+
+  <!-- a question tool call renders as the Desktop-style question card, answerable in place -->
+  <QuestionCard
+    v-else-if="item.kind === 'tool' && item.questions?.length"
+    class="rise"
+    :questions="item.questions"
+    :answers="item.answers"
+    :call-id="pendingCallId(item)"
+  />
 
   <!-- one tool call -->
   <ToolCard v-else-if="item.kind === 'tool'" :item="item" class="rise" />

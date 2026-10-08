@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import { api, openStream, UnauthorizedError } from './api.js'
+import { parseQuestionArgs, parseQuestionResult } from './questions.js'
 
 /** Everything the shell renders; Session events are folded into `events` and `telemetry` here. */
 export const state = reactive({
@@ -119,12 +120,17 @@ export const transcriptItems = computed(() => {
       continue
     }
     if (type === 'tool/call') {
+      const name = String(data.name ?? 'tool')
+      const args = String(data.arguments ?? '')
       const item = {
         kind: 'tool',
         key: `tool-${String(event.seq)}`,
         callId: String(data.callId ?? event.seq),
-        name: String(data.name ?? 'tool'),
-        args: String(data.arguments ?? ''),
+        name,
+        args,
+        // `ask_user_question` renders as a question card instead of a JSON tool card.
+        questions: parseQuestionArgs(name, args),
+        answers: [],
         result: undefined,
         error: undefined,
       }
@@ -137,6 +143,7 @@ export const transcriptItems = computed(() => {
       const item = toolIndex.get(callId)
       if (item !== undefined) {
         item.result = blocksToText(data.message)
+        item.answers = item.questions.length > 0 ? parseQuestionResult(item.result) : []
         item.error = data.error === undefined ? undefined : String(data.error.name ?? 'error')
       } else {
         items.push({
@@ -567,13 +574,20 @@ export async function cancelTurn () {
   }
 }
 
-/** Answer one pending question. */
+/**
+ * Answer one pending question.
+ * @param callId - the pending question's call id.
+ * @param answers - `{id, selected, custom?}` items.
+ * @returns true when the Host accepted the batch.
+ */
 export async function answerQuestion (callId, answers) {
   try {
     await api('/api/answer', { method: 'POST', body: { callId, answers } })
     state.pending.questions = state.pending.questions.filter((question) => question.callId !== callId)
+    return true
   } catch (error) {
     state.actionError = String(error.message ?? error)
+    return false
   }
 }
 
