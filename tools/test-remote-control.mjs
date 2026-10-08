@@ -56,6 +56,8 @@ function createHost () {
     liveAgents.push(agent)
     return agent
   }
+  /** Question call ids the fake Host service considers already continued (answerable in place). */
+  const continuedQuestions = new Set()
   makeAgent('s1')
 
   // Stands in for the desktop answerer: registered before the plugin (so a listener that does not
@@ -113,9 +115,11 @@ function createHost () {
       if (key === 'agents') return { list: () => liveAgents, get: (id) => liveAgents.find((agent) => agent.id === id) }
       if (key === 'userQuestions') {
         return {
+          // The real service only accepts a question that already timed out into `continued(agent)`;
+          // everything else must go through the waterfall race.
           answer: (agent, callId, answer) => {
             calls.answer.push({ agentId: agent.id, callId, answer })
-            return true
+            return continuedQuestions.has(String(callId))
           },
         }
       }
@@ -179,6 +183,15 @@ function createHost () {
     agentScopes,
     makeAgent,
     DESKTOP_ANSWER,
+    /** Mark a question as already continued, so the Host service accepts a remote answer for it. */
+    markContinued: (callId) => continuedQuestions.add(String(callId)),
+    /** Swap the simulated desktop answerer (the last-registered listener of a waterfall). */
+    replaceBridge: (name, fn) => {
+      const list = handlers.get(name) ?? []
+      if (list.length === 0) list.push(fn)
+      else list[list.length - 1] = fn
+      handlers.set(name, list)
+    },
     /** Emit one root-scope event to the plugin's listeners. */
     emit: (name, ...payload) => {
       for (const fn of handlers.get(name) ?? []) fn(...payload)
@@ -557,6 +570,9 @@ await check('a question tool call is captured from the session log feed', async 
   assert.equal(record.questions[0].multiSelect, false)
   assert.equal(record.questions[0].options.length, 2)
 
+  // A question captured only from the log has no live waterfall, so answering it goes through the
+  // Host service — which accepts it once it has continued (timed mode).
+  host.markContinued('call-8')
   const answered = await fetch(`${base}/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
@@ -564,6 +580,7 @@ await check('a question tool call is captured from the session log feed', async 
   })
   assert.equal(answered.status, 200, await answered.clone().text())
   assert.equal(host.calls.answer.at(-1).agentId, 's1')
+  assert.equal((await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()).capture.sessionCalls >= 1, true)
 
   // A question answered elsewhere (or timed out) leaves the pending list when its result lands.
   host.emit('session/event', { id: 's1' }, {
@@ -599,14 +616,20 @@ await check('a question is captured even though the desktop answerer vetoes the 
   const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
   assert.equal(diagnose.questions.some((question) => question.callId === 'call-3'), true)
 
-  const answered = await fetch(`${base}/api/answer`, {
+  // The desktop answered, so it won the race: a later remote answer is refused instead of pretending
+  // to be accepted.
+  const late = await fetch(`${base}/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-3', answers: [{ id: 'q3', selected: ['B'] }] }),
   })
-  const body = await answered.text()
-  assert.equal(answered.status, 200, body)
-  assert.equal(host.calls.answer.at(-1).agentId, 's1', 'the request’s agent routed the answer')
+  assert.equal(late.status, 200)
+  assert.equal((await late.json()).ok, false, 'the settled waterfall no longer accepts answers')
+
+  // Its result retires the record, which is what happens live moments later.
+  host.emit('session/event', { id: 's1' }, { type: 'tool/result', seq: 46, data: { message: { toolCallId: 'call-3', content: [] } } })
+  const cleared = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(cleared.pending.questions.some((question) => question.callId === 'call-3'), false)
 })
 
 await check('a question from an already-running agent is captured and answerable', async () => {
@@ -628,6 +651,9 @@ await check('a question from an already-running agent is captured and answerable
   assert.equal(state.pending.questions.length, 1, `pending: ${state.pending.questions.map((question) => question.callId).join(',')}`)
   assert.deepEqual(state.pending.questions[0].questions[0].options, [{ label: 'A' }, { label: 'B' }])
 
+  // This listener was reached directly, so no waterfall is being raced here: the Host service is the
+  // route, which accepts the question once it has continued.
+  host.markContinued('call-1')
   const answered = await fetch(`${base}/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
@@ -669,6 +695,58 @@ await check('the root listener is a safety net for unannounced agents', async ()
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-2', answers: [{ id: 'q2', selected: ['Yes'] }] }),
   })
+})
+
+await check('a question the desktop is still waiting on is answerable from the remote page', async () => {
+  // The live case: `userQuestions.answer()` refuses a question that has not timed out, so the only
+  // way to answer is to resolve the waterfall this plugin races. The desktop bridge here never
+  // resolves, which leaves the remote page as the only possible answerer.
+  host.replaceBridge('user-questions/request', () => new Promise(() => {}))
+  const waiting = host.emitWaterfall('user-questions/request', {
+    agent: host.liveAgents[0],
+    questions: [{ id: 'pick', question: '谁来答？', options: [{ label: '远程' }, { label: '桌面' }] }],
+    wait: { callId: 'call-race' },
+  })
+
+  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const record = state.pending.questions.find((question) => question.callId === 'call-race')
+  assert.notEqual(record, undefined, 'the question is displayed while the waterfall waits')
+  assert.equal(record.answerable, true, 'the racing waterfall makes it answerable')
+
+  const answered = await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-race', answers: [{ id: 'pick', selected: ['远程'] }] }),
+  })
+  const body = await answered.text()
+  assert.equal(answered.status, 200, body)
+  assert.equal(JSON.parse(body).ok, true)
+
+  // The answer travels back through the waterfall the tool is awaiting.
+  assert.deepEqual(await waiting, { answers: [{ id: 'pick', selected: ['远程'] }] })
+  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(after.pending.questions.some((question) => question.callId === 'call-race'), false)
+  host.replaceBridge('user-questions/request', () => Promise.resolve(host.DESKTOP_ANSWER))
+})
+
+await check('a continued question is answered through the Host service', async () => {
+  host.emit('session/event', { id: 's1' }, {
+    type: 'tool/call',
+    seq: 60,
+    data: { callId: 'call-svc', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'late', question: '超时后答', options: [{ label: 'A' }] }] }) },
+  })
+  host.markContinued('call-svc')
+  const answered = await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-svc', answers: [{ id: 'late', selected: ['A'] }] }),
+  })
+  const body = await answered.text()
+  assert.equal(answered.status, 200, body)
+  assert.equal(JSON.parse(body).ok, true)
+  assert.equal(host.calls.answer.at(-1).callId, 'call-svc')
+  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(after.pending.questions.some((question) => question.callId === 'call-svc'), false)
 })
 
 await check('an approval is surfaced but keeps the desktop decision', async () => {

@@ -391,7 +391,13 @@ export function apply (ctx, config) {
 
   /** @returns the pending-interaction payload shared by `/api/state` and the SSE feed. */
   const pendingPayload = () => ({
-    questions: [...questions.values()],
+    questions: [...questions.values()].map((record) => ({
+      ...record,
+      agent: undefined,
+      // Answerable either through the Host service (a timed question that already continued) or
+      // through the waterfall this plugin is racing (a question the desktop is still waiting on).
+      answerable: record.answerable === true || remoteAnswers.has(record.callId),
+    })),
     approvals: [...approvals.values()],
   })
 
@@ -847,14 +853,23 @@ export function apply (ctx, config) {
         json(400, { error: 'answers required' })
         return
       }
+      // Two paths, in order of authority. The Host service accepts a question that already timed out
+      // into `continued(agent)`; anything else (a question the desktop is still waiting on) is
+      // answered by resolving the waterfall this plugin races.
+      let accepted = false
       try {
-        const accepted = await answerQuestion(ctx, record, answers)
-        if (accepted === true) questions.delete(callId)
-        broadcast('pending', pendingPayload())
-        json(200, { ok: accepted === true })
-      } catch (error) {
-        json(500, { error: String(error?.message ?? error) })
+        accepted = await answerQuestion(ctx, record, answers)
+      } catch {
+        /* not a continued question: fall through to the waterfall path */
       }
+      const deliver = remoteAnswers.get(callId)
+      if (accepted !== true && deliver !== undefined) {
+        deliver(answers)
+        accepted = true
+      }
+      if (accepted === true) questions.delete(callId)
+      broadcast('pending', pendingPayload())
+      json(200, { ok: accepted === true })
       return
     }
 
@@ -916,9 +931,18 @@ export function apply (ctx, config) {
 
   // Pending interactions are captured from the Session log's own append feed (`session/event`), which
   // is an `emit`: every listener runs, so nothing can veto the observation. The `user-questions/request`
-  // waterfall is kept as a secondary source for questions that never reach a tool call.
+  // waterfall is used both as a secondary source and to answer questions the Host service cannot take.
   const agentDisposers = new Map()
   const capture = { attached: [], agentCreated: 0, rootQuestions: 0, missingWait: 0, sessionCalls: 0, lastRequest: undefined }
+  /**
+   * Resolvers for questions whose waterfall is still waiting.
+   *
+   * `ctx.userQuestions.answer()` only accepts a question that already timed out into `continued(agent)`,
+   * so a question the desktop is still synchronously waiting on can only be answered by whoever holds
+   * the waterfall. This plugin therefore races the downstream chain (the desktop panel) against the
+   * remote page and returns whichever answer arrives first.
+   */
+  const remoteAnswers = new Map()
 
   /** Tool names whose calls carry a user question. */
   const QUESTION_TOOLS = new Set(['ask_user_question', 'request_user_input'])
@@ -1073,7 +1097,28 @@ export function apply (ctx, config) {
     const offRootQuestions = ctx.on('user-questions/request', (request, next) => {
       capture.rootQuestions += 1
       recordQuestion(request?.agent, request)
-      return next()
+      const callId = request?.wait?.callId
+      if (callId === undefined) return next()
+      // Race the downstream answerer (the desktop panel) against the remote page. `next()` is still
+      // called, so the desktop panel appears and stays authoritative whenever it answers first.
+      return new Promise((resolve, reject) => {
+        const key = String(callId)
+        let settled = false
+        const settle = (value) => {
+          if (settled) return
+          settled = true
+          remoteAnswers.delete(key)
+          resolve(value)
+        }
+        remoteAnswers.set(key, (answers) => {
+          settle({ answers })
+        })
+        next().then(settle, (error) => {
+          remoteAnswers.delete(key)
+          settled = true
+          reject(error)
+        })
+      })
     }, { prepend: true })
     // Observed only, like the per-agent registration.
     const offRootApprovals = ctx.on('approval/request', (request, next) => {
