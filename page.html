@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>DSH 遥控</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --muted:#666; --bg:#fff; --card:#f5f6f8; --line:#e3e5e9; --accent:#2f6fed; --warn:#b26a00; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e8eaee; --muted:#9aa0aa; --bg:#14161a; --card:#1d2026; --line:#2b3038; --accent:#6c9cff; --warn:#e0a44a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; display:flex; flex-direction:column; min-height:100dvh; }
+  header { position:sticky; top:0; z-index:2; background:var(--bg); border-bottom:1px solid var(--line); padding:10px 14px calc(10px + env(safe-area-inset-top,0px)); display:flex; align-items:center; gap:10px; }
+  header h1 { font-size:15px; margin:0; flex:1; display:flex; align-items:center; gap:8px; min-width:0; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
+  .dot.on { background:#28a745; box-shadow:0 0 0 3px rgba(40,167,69,.18); }
+  button { font:inherit; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); padding:7px 12px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; }
+  main { flex:1; padding:12px; display:flex; flex-direction:column; gap:12px; max-width:900px; width:100%; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .sessions { display:flex; flex-direction:column; gap:6px; max-height:38dvh; overflow:auto; }
+  .session { text-align:left; width:100%; display:flex; gap:8px; align-items:center; }
+  .session.active { border-color:var(--accent); }
+  .session .title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #log { display:flex; flex-direction:column; gap:10px; }
+  .msg { border-left:3px solid var(--line); padding:2px 0 2px 10px; white-space:pre-wrap; word-break:break-word; }
+  .msg.user { border-color:var(--accent); }
+  .msg.assistant { border-color:#28a745; }
+  .msg.tool { border-color:var(--warn); color:var(--muted); font-size:13px; white-space:pre-wrap; }
+  .msg .who { font-size:12px; color:var(--muted); margin-bottom:2px; }
+  .pending { border:1px solid var(--warn); }
+  .opts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  footer { position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px)); }
+  .composer { display:flex; gap:8px; align-items:flex-end; max-width:900px; margin:0 auto; }
+  textarea { flex:1; font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); resize:none; min-height:42px; max-height:40dvh; }
+  .hidden { display:none !important; }
+  .err { color:#d33; font-size:13px; }
+  code { background:var(--card); padding:1px 5px; border-radius:5px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dot" class="dot"></span><span id="headTitle">DSH 遥控</span></h1>
+  <button id="refresh" type="button">刷新</button>
+</header>
+
+<main>
+  <div id="login" class="card hidden">
+    <div style="margin-bottom:8px">需要一个访问令牌。它由 Host 首次启动时生成，写在 <code>~/.dsh/remote-control/auth.json</code>，或直接使用带 <code>?k=</code> 的链接。</div>
+    <div class="row">
+      <input id="token" type="password" placeholder="令牌" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)" />
+      <button id="loginBtn" class="primary" type="button">进入</button>
+    </div>
+    <div id="loginErr" class="err"></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div id="pending"></div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <strong>会话</strong><span id="bindHint" class="muted"></span>
+      </div>
+      <div id="sessions" class="sessions"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <strong id="sessionTitle">未选择会话</strong>
+        <button id="cancel" type="button" class="hidden">停止</button>
+      </div>
+      <div id="log"></div>
+      <div id="streamErr" class="err"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="composer">
+    <textarea id="text" rows="1" placeholder="给这个会话发一条消息…"></textarea>
+    <button id="send" class="primary" type="button" disabled>发送</button>
+  </div>
+</footer>
+
+<script>
+'use strict'
+const $ = (id) => document.getElementById(id)
+const state = { sessions: [], selected: undefined, running: false, source: undefined, stream: undefined, pending: { questions: [], approvals: [] }, assistant: new Map() }
+
+function api (path, options) {
+  const init = Object.assign({ headers: { 'content-type': 'application/json', 'x-rc': '1' } }, options || {})
+  if (init.body !== undefined && typeof init.body !== 'string') init.body = JSON.stringify(init.body)
+  return fetch(path, init).then(async (response) => {
+    if (response.status === 401) { showLogin(); throw new Error('unauthorized') }
+    const text = await response.text()
+    const payload = text === '' ? {} : JSON.parse(text)
+    if (!response.ok) throw new Error(payload.error || ('HTTP ' + response.status))
+    return payload
+  })
+}
+
+function showLogin () { $('login').classList.remove('hidden'); $('app').classList.add('hidden') }
+function showApp () { $('login').classList.add('hidden'); $('app').classList.remove('hidden') }
+
+function login (token) {
+  return fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-rc': '1' }, body: JSON.stringify({ token }) })
+    .then((response) => { if (!response.ok) throw new Error('令牌不正确'); return true })
+}
+
+function blocksToText (message) {
+  if (message === null || message === undefined) return ''
+  if (typeof message === 'string') return message
+  const content = message.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.map((block) => {
+    if (block === null || typeof block !== 'object') return ''
+    if (block.type === 'text') return String(block.text || '')
+    if (block.type === 'reasoning') return String(block.text || '')
+    if (block.type === 'tool-call') return '[调用 ' + String(block.name || '') + ']'
+    if (block.type === 'image') return '[图片]'
+    if (block.type === 'file') return '[文件]'
+    return ''
+  }).filter((part) => part !== '').join('\n')
+}
+
+function addMessage (kind, who, text) {
+  if (text === undefined || text === null || text === '') return
+  const node = document.createElement('div')
+  node.className = 'msg ' + kind
+  const head = document.createElement('div')
+  head.className = 'who'
+  head.textContent = who
+  const body = document.createElement('div')
+  body.textContent = text
+  node.appendChild(head)
+  node.appendChild(body)
+  const log = $('log')
+  log.appendChild(node)
+  log.scrollTop = log.scrollHeight
+  window.scrollTo(0, document.body.scrollHeight)
+}
+
+function renderEvent (event) {
+  if (event === null || typeof event !== 'object') return
+  const data = event.data || {}
+  if (event.type === 'user/message') addMessage('user', '你', blocksToText(data))
+  else if (event.type === 'assistant/message') addMessage('assistant', '助手', blocksToText(data.message))
+  else if (event.type === 'tool/call') addMessage('tool', '工具 ' + String(data.name || ''), String(data.arguments || '').slice(0, 400))
+  else if (event.type === 'tool/result') addMessage('tool', '结果', blocksToText(data.message).slice(0, 400) || (data.error ? String(data.error.name) : ''))
+  else if (event.type === 'turn/end' && data.reason && data.reason.kind !== 'completed') addMessage('tool', '本轮结束', String(data.reason.kind))
+}
+
+function applyAssistantStream (frame) {
+  if (frame === null || typeof frame !== 'object') return
+  if (frame.type === 'chunk' && frame.chunk && frame.chunk.type === 'text-delta') {
+    const current = (state.assistant.get(frame.attemptId) || '') + String(frame.chunk.text || '')
+    state.assistant.set(frame.attemptId, current)
+    let node = document.getElementById('live')
+    if (node === null) {
+      node = document.createElement('div')
+      node.id = 'live'
+      node.className = 'msg assistant'
+      node.innerHTML = '<div class="who">助手（生成中）</div><div id="liveBody"></div>'
+      $('log').appendChild(node)
+    }
+    document.getElementById('liveBody').textContent = current
+    window.scrollTo(0, document.body.scrollHeight)
+  }
+  if (frame.type === 'end') {
+    const node = document.getElementById('live')
+    if (node !== null) node.remove()
+    state.assistant.delete(frame.attemptId)
+  }
+}
+
+function handleFrame (frame) {
+  if (frame === null || typeof frame !== 'object') return
+  if (frame.type === 'snapshot') {
+    $('log').innerHTML = ''
+    state.assistant.clear()
+    const records = Array.isArray(frame.records) ? frame.records : []
+    for (const record of records) if (record && record.type === 'event') renderEvent(record.event)
+    addMessage('tool', '历史', records.length === 0 ? '（这个会话还没有消息）' : '—— 以上是最近 ' + String(records.length) + ' 条 ——')
+    return
+  }
+  if (frame.type === 'event') { renderEvent(frame.event); return }
+  if (frame.type === 'assistant-stream') { applyAssistantStream(frame.frame); return }
+}
+
+function openStream (sessionId) {
+  if (state.stream !== undefined) state.stream.close()
+  state.assistant.clear()
+  $('log').innerHTML = ''
+  const stream = new EventSource('/api/stream?sessionId=' + encodeURIComponent(sessionId))
+  state.stream = stream
+  stream.addEventListener('frame', (event) => handleFrame(JSON.parse(event.data)))
+  stream.addEventListener('pending', (event) => { state.pending = JSON.parse(event.data); renderPending() })
+  stream.addEventListener('sessions', (event) => { state.sessions = JSON.parse(event.data).sessions || []; renderSessions() })
+  stream.addEventListener('stream-error', (event) => { $('streamErr').textContent = '流中断：' + JSON.parse(event.data).message })
+  stream.onerror = () => { $('streamErr').textContent = '连接中断，正在重连…' }
+  stream.onopen = () => { $('streamErr').textContent = '' }
+}
+
+function renderSessions () {
+  const box = $('sessions')
+  box.innerHTML = ''
+  if (state.sessions.length === 0) { box.innerHTML = '<div class="muted">没有可见的会话</div>'; return }
+  for (const session of state.sessions) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'session' + (session.id === state.selected ? ' active' : '')
+    const dot = document.createElement('span')
+    dot.className = 'dot' + (session.running ? ' on' : '')
+    const title = document.createElement('span')
+    title.className = 'title'
+    title.textContent = (session.origin === 'subagent' ? '子代理 · ' : '') + (session.title || session.id)
+    button.appendChild(dot)
+    button.appendChild(title)
+    button.addEventListener('click', () => selectSession(session.id, session))
+    box.appendChild(button)
+  }
+}
+
+function renderPending () {
+  const box = $('pending')
+  box.innerHTML = ''
+  for (const question of state.pending.questions || []) {
+    const card = document.createElement('div')
+    card.className = 'card pending'
+    const title = document.createElement('div')
+    title.innerHTML = '<strong>需要你回答</strong> <span class="muted">' + (question.sessionId === state.selected ? '' : '（其它会话）') + '</span>'
+    card.appendChild(title)
+    for (const item of question.questions || []) {
+      const line = document.createElement('div')
+      line.style.marginTop = '8px'
+      line.textContent = item.question + (item.detail ? '（' + item.detail + '）' : '')
+      card.appendChild(line)
+      const options = document.createElement('div')
+      options.className = 'opts'
+      for (const option of item.options || []) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.textContent = option.label
+        button.addEventListener('click', () => answer(question.callId, [{ id: item.id, selected: [option.label] }]))
+        options.appendChild(button)
+      }
+      const custom = document.createElement('button')
+      custom.type = 'button'
+      custom.textContent = '其它…'
+      custom.addEventListener('click', () => {
+        const value = window.prompt('你的回答：')
+        if (value !== null && value !== '') answer(question.callId, [{ id: item.id, selected: [], custom: value }])
+      })
+      options.appendChild(custom)
+      card.appendChild(options)
+    }
+    box.appendChild(card)
+  }
+  for (const approval of state.pending.approvals || []) {
+    const card = document.createElement('div')
+    card.className = 'card pending'
+    const soft = document.createElement('div')
+    soft.className = 'muted'
+    soft.textContent = '需要在桌面窗口确认（远程端目前只展示、不代答）'
+    card.innerHTML = '<strong>等待确认：' + approval.toolName + '</strong>'
+    if (approval.reason) {
+      const reason = document.createElement('div')
+      reason.textContent = approval.reason
+      card.appendChild(reason)
+    }
+    card.appendChild(soft)
+    box.appendChild(card)
+  }
+}
+
+function answer (callId, answers) {
+  api('/api/answer', { method: 'POST', body: { callId, answers } }).then(() => {
+    state.pending.questions = (state.pending.questions || []).filter((item) => item.callId !== callId)
+    renderPending()
+  }).catch((error) => { window.alert(String(error.message || error)) })
+}
+
+function selectSession (sessionId, session) {
+  state.selected = sessionId
+  state.running = session ? session.running === true : false
+  $('sessionTitle').textContent = session ? (session.title || sessionId) : sessionId
+  $('cancel').classList.toggle('hidden', !state.running)
+  renderSessions()
+  openStream(sessionId)
+}
+
+function loadState () {
+  return api('/api/state').then((payload) => {
+    state.sessions = payload.sessions || []
+    state.pending = payload.pending || { questions: [], approvals: [] }
+    $('bindHint').textContent = payload.bind === '127.0.0.1' ? '仅本机监听' : ('监听 ' + payload.bind)
+    showApp()
+    renderSessions()
+    renderPending()
+    if (state.selected === undefined && state.sessions.length > 0) {
+      const running = state.sessions.find((item) => item.running) || state.sessions[0]
+      selectSession(running.id, running)
+    } else if (state.selected !== undefined) {
+      const current = state.sessions.find((item) => item.id === state.selected)
+      if (current !== undefined) { state.running = current.running; $('cancel').classList.toggle('hidden', !state.running) }
+    }
+  }).catch((error) => { if (String(error.message) !== 'unauthorized') window.alert(String(error.message || error)) })
+}
+
+function send () {
+  const text = $('text').value.trim()
+  if (text === '' || state.selected === undefined) return
+  $('send').disabled = true
+  api('/api/send', { method: 'POST', body: { sessionId: state.selected, text } }).then(() => {
+    $('text').value = ''
+    $('text').style.height = 'auto'
+  }).catch((error) => { window.alert(String(error.message || error)) }).finally(() => { $('send').disabled = false })
+}
+
+$('send').addEventListener('click', send)
+$('text').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send() }
+})
+$('text').addEventListener('input', (event) => {
+  event.target.style.height = 'auto'
+  event.target.style.height = Math.min(event.target.scrollHeight, window.innerHeight * 0.4) + 'px'
+})
+$('refresh').addEventListener('click', () => { void loadState() })
+$('cancel').addEventListener('click', () => {
+  if (state.selected === undefined) return
+  api('/api/cancel', { method: 'POST', body: { sessionId: state.selected } }).catch((error) => { window.alert(String(error.message || error)) })
+})
+$('loginBtn').addEventListener('click', () => {
+  login($('token').value.trim()).then(() => { $('token').value = ''; return loadState() }).catch((error) => { $('loginErr').textContent = String(error.message || error) })
+})
+$('token').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('loginBtn').click() })
+
+// A `?k=` link turns the token into a cookie once, then leaves a clean URL behind.
+const params = new URLSearchParams(window.location.search)
+const linkToken = params.get('k')
+if (linkToken !== null && linkToken !== '') {
+  login(linkToken).then(() => {
+    history.replaceState(null, '', window.location.pathname)
+    return loadState()
+  }).catch(() => { showLogin(); $('loginErr').textContent = '链接里的令牌无效' })
+} else {
+  void loadState()
+}
+setInterval(() => { if (state.stream === undefined || state.stream.readyState === 2) void loadState() }, 5000)
+</script>
+</body>
+</html>
