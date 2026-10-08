@@ -1,0 +1,16 @@
+{
+  "name": "@local/dsh-remote-control",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phone-friendly remote control page: list Sessions, watch a running turn, send prompts, answer questions.",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

@@ -1,0 +1,18 @@
+# Profile bundle layer for the Remote Control plugin.
+#
+# bind  127.0.0.1  loopback only — reach it through a tunnel/VPN (safest)
+# bind  0.0.0.0    every interface — needs the Windows Firewall rule from
+#                  tools/firewall-remote-control.ps1, and TLS or a tunnel if the network is not
+#                  trusted (plain http to a LAN IP is not a browser "secure context")
+#
+# Currently opened to the LAN at the owner's request: the firewall rule is scoped to the local
+# subnet on the Domain/Private profiles. Set it back to '127.0.0.1' and reload the bundle to close it.
+#
+# The token is generated on first start into <DSH home>/remote-control/auth.json and printed once
+# in the Host log; set it here to pin a fixed one instead.
+- insert:
+    - id: remote-control
+      name: '@local/dsh-remote-control'
+      config:
+        bind: '0.0.0.0'
+        port: 19400

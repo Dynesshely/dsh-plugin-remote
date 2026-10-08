@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Remote Control",
+    "description": "Serves a small authenticated page so a phone or another device can watch a running Session, send prompts, and answer questions."
+  }
+}

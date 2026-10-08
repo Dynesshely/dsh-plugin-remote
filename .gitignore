@@ -1,0 +1,8 @@
+# Dependencies and build output are reproducible: `pnpm install` then `pnpm run build` inside `ui/`.
+node_modules/
+ui/dist/
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db
+*.log
