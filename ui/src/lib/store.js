@@ -1,0 +1,628 @@
+import { computed, reactive } from 'vue'
+import { api, openStream, UnauthorizedError } from './api.js'
+
+/** Everything the shell renders; Session events are folded into `events` and `telemetry` here. */
+export const state = reactive({
+  booted: false,
+  unauthorized: false,
+  bootError: '',
+  bind: '',
+  workspaces: [],
+  sessions: [],
+  selected: undefined,
+  pending: { questions: [], approvals: [] },
+  events: [],
+  /** True while another backward history page is in flight. */
+  loadingOlder: false,
+  /** Cleared once a backward page comes back empty, so the button disappears at the start of a log. */
+  hasOlder: true,
+  live: { attemptId: undefined, text: '', reasoning: '' },
+  streamError: '',
+  actionError: '',
+  models: { groups: [], defaultSelection: undefined },
+  selection: undefined,
+  permissions: { options: [], defaultPreset: '', current: undefined },
+  telemetry: {
+    turn: 0,
+    step: 0,
+    running: false,
+    provider: '',
+    model: '',
+    contextWindow: 0,
+    totalInput: 0,
+    totalOutput: 0,
+    totalCacheRead: 0,
+    totalCacheWrite: 0,
+    totalReasoning: 0,
+    lastInput: 0,
+    tokensPerSecond: 0,
+    streamStartedAt: 0,
+  },
+})
+
+/** The Session the sidebar should show as active. */
+export const selectedSession = computed(() => state.sessions.find((session) => session.id === state.selected))
+
+/** Sessions grouped by workspace, in the deployment's workspace order. */
+export const groupedSessions = computed(() => {
+  const byWorkspace = new Map()
+  for (const workspace of state.workspaces) {
+    byWorkspace.set(workspace.id, { ...workspace, sessions: [] })
+  }
+  const orphans = { id: '__none__', title: '未归档', path: '', sessions: [] }
+  for (const session of state.sessions) {
+    const group = byWorkspace.get(session.workspaceId)
+    if (group === undefined) orphans.sessions.push(session)
+    else group.sessions.push(session)
+  }
+  const groups = [...byWorkspace.values()].filter((group) => group.sessions.length > 0)
+  for (const group of groups) {
+    group.sessions.sort((left, right) => right.updatedAt - left.updatedAt)
+  }
+  if (orphans.sessions.length > 0) {
+    orphans.sessions.sort((left, right) => right.updatedAt - left.updatedAt)
+    groups.push(orphans)
+  }
+  return groups
+})
+
+/**
+ * Render items for the transcript: messages, paired tool calls, and turn notices.
+ * Tool results are attached to the call they answer, so one card shows both halves.
+ */
+export const transcriptItems = computed(() => {
+  const items = []
+  const toolIndex = new Map()
+  /** The most recent prompt, so injected notes can be folded into its bubble. */
+  let lastUser = null
+  for (const event of state.events) {
+    const type = event.type
+    const data = event.data ?? {}
+    if (type === 'user/message') {
+      const parts = messageParts(data)
+      // Harness-injected context (time readings, runtime snapshots) is a user turn in the log, but it
+      // is metadata: it belongs in the bubble of the prompt it belongs to, never as its own prompt.
+      if (isContextNote(data, parts.text)) {
+        const note = {
+          text: parts.text,
+          ...(typeof data.source?.kind === 'string' ? { sourceKind: data.source.kind } : {}),
+        }
+        if (lastUser !== null) lastUser.notes.push(note)
+        else items.push({ kind: 'context', key: `context-${String(event.seq)}`, ...note })
+        continue
+      }
+      const item = {
+        kind: 'user',
+        key: `user-${String(event.seq)}`,
+        text: parts.text,
+        files: parts.files,
+        images: parts.images,
+        notes: [],
+      }
+      items.push(item)
+      lastUser = item
+      continue
+    }
+    if (type === 'assistant/message') {
+      const parts = messageParts(data.message)
+      // A step that only calls tools carries no text, reasoning, or media. Rendering it would add
+      // an invisible item between two tool calls and break their run into separate cards.
+      if (parts.text === '' && parts.reasoning === '' && parts.images.length === 0 && parts.files.length === 0) continue
+      items.push({
+        kind: 'assistant',
+        key: `assistant-${String(event.seq)}`,
+        text: parts.text,
+        reasoning: parts.reasoning,
+        files: parts.files,
+        images: parts.images,
+      })
+      continue
+    }
+    if (type === 'tool/call') {
+      const item = {
+        kind: 'tool',
+        key: `tool-${String(event.seq)}`,
+        callId: String(data.callId ?? event.seq),
+        name: String(data.name ?? 'tool'),
+        args: String(data.arguments ?? ''),
+        result: undefined,
+        error: undefined,
+      }
+      toolIndex.set(item.callId, item)
+      items.push(item)
+      continue
+    }
+    if (type === 'tool/result') {
+      const callId = String(data.message?.toolCallId ?? '')
+      const item = toolIndex.get(callId)
+      if (item !== undefined) {
+        item.result = blocksToText(data.message)
+        item.error = data.error === undefined ? undefined : String(data.error.name ?? 'error')
+      } else {
+        items.push({
+          kind: 'tool',
+          key: `tool-result-${String(event.seq)}`,
+          callId,
+          name: 'tool',
+          args: '',
+          result: blocksToText(data.message),
+          error: data.error === undefined ? undefined : String(data.error.name ?? 'error'),
+        })
+      }
+      continue
+    }
+    if (type === 'turn/end') {
+      const reason = data.reason?.kind
+      if (reason !== undefined && reason !== 'completed') {
+        items.push({ kind: 'notice', key: `turn-${String(event.seq)}`, text: `本轮结束：${String(reason)}` })
+      }
+      continue
+    }
+    if (type === 'model-retry' || type === 'turn-error') {
+      items.push({ kind: 'notice', key: `error-${String(event.seq)}`, text: `${type}：${JSON.stringify(data).slice(0, 300)}` })
+    }
+  }
+  // Consecutive calls of one tool second-level collapse into a group card, so a run of five
+  // `read` calls reads as "5 × read" (expandable to the five cards) instead of five rows.
+  const grouped = []
+  for (const item of items) {
+    const previous = grouped.at(-1)
+    if (item.kind === 'tool' && previous?.kind === 'toolGroup' && previous.name === item.name) {
+      previous.items.push(item)
+      previous.count = previous.items.length
+      continue
+    }
+    if (item.kind === 'tool' && previous?.kind === 'tool' && previous.name === item.name) {
+      grouped[grouped.length - 1] = {
+        kind: 'toolGroup',
+        key: `tool-group-${previous.key}`,
+        name: item.name,
+        count: 2,
+        items: [previous, item],
+      }
+      continue
+    }
+    grouped.push(item)
+  }
+  return grouped
+})
+
+/* ---------------------------------------------------------------- context notes */
+
+/**
+ * Opening lines of context snapshots the Harness injects into a Session log as user turns.
+ * Only used as a fallback: injections normally mark themselves through `source.kind`.
+ */
+const CONTEXT_NOTE_PREFIXES = [
+  'Time sampled while preparing turn ',
+  'Elapsed since the preceding ',
+  'Current runtime context. This snapshot supersedes',
+]
+
+/**
+ * Whether a `user/message` entry is Harness-injected context rather than something the user typed.
+ *
+ * Injections identify their producer with a `source.kind` other than `user` (the time-context plugin
+ * uses `time-context`), which is authoritative. A few well-known snapshots are also recognised by
+ * their exact opening line, in case a producer forwards them without that marker.
+ * @param data - the `user/message` event payload.
+ * @param text - the text already extracted from it.
+ * @returns true when the entry should render as a subdued note and stay out of the prompt rail.
+ */
+export function isContextNote (data, text = '') {
+  const kind = data?.source?.kind
+  if (typeof kind === 'string' && kind !== 'user') return true
+  const opening = String(text).trimStart()
+  return CONTEXT_NOTE_PREFIXES.some((prefix) => opening.startsWith(prefix))
+}
+
+/**
+ * Split a message's content blocks into the parts the transcript renders separately.
+ *
+ * Reasoning is kept out of the visible text so the transcript can collapse it by default, and
+ * tool calls are dropped entirely: the transcript already renders each one as its own card, so
+ * repeating the names in the text would print "read read read…" under the answer.
+ * @param message - a wire message carrying `content` blocks.
+ * @returns `{ text, reasoning, files }`.
+ */
+export function messageParts (message) {
+  const text = []
+  const reasoning = []
+  const files = []
+  const images = []
+  if (message === null || message === undefined) return { text: '', reasoning: '', files, images }
+  if (typeof message === 'string') return { text: message, reasoning: '', files, images }
+  const content = typeof message.content === 'string'
+    ? [{ type: 'text', text: message.content }]
+    : message.content
+  if (!Array.isArray(content)) return { text: '', reasoning: '', files, images }
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    if (block.type === 'text') text.push(String(block.text ?? ''))
+    else if (block.type === 'reasoning') reasoning.push(String(block.text ?? ''))
+    else if (block.type === 'image') {
+      const attachment = block.attachment ?? {}
+      images.push({
+        attachmentId: String(attachment.attachmentId ?? ''),
+        mediaType: String(attachment.mediaType ?? 'image/png'),
+        name: attachment.name,
+      })
+      // No "🖼 图片" label: images render as thumbnails in the bubble itself.
+    } else if (block.type === 'file') files.push(`📎 ${String(block.attachment?.name ?? '文件')}`)
+  }
+  return { text: text.join('\n'), reasoning: reasoning.join('\n'), files, images }
+}
+
+/* ---------------------------------------------------------------- attachment images */
+
+/** Fetched attachment data URLs, keyed by `<sessionId>:<attachmentId>`. */
+const attachmentImages = reactive(new Map())
+/** Keys with a fetch in flight, so one image is requested once. */
+const attachmentPending = new Set()
+
+/**
+ * Fetch one attachment's bytes through the Host and remember them.
+ * Idempotent, so a component can call it from a watcher on every change.
+ * @param sessionId - the Session whose log proves the attachment.
+ * @param attachmentId - durable attachment identity.
+ */
+export function ensureAttachmentImage (sessionId, attachmentId) {
+  if (sessionId === undefined || sessionId === null || attachmentId === '') return
+  const key = `${sessionId}:${attachmentId}`
+  if (attachmentImages.has(key) || attachmentPending.has(key)) return
+  attachmentPending.add(key)
+  api(`/api/attachment?sessionId=${encodeURIComponent(sessionId)}&attachmentId=${encodeURIComponent(attachmentId)}`)
+    .then((payload) => {
+      attachmentImages.set(key, payload.data === '' ? '' : `data:${payload.mediaType};base64,${payload.data}`)
+    })
+    .catch(() => {
+      attachmentImages.set(key, '')
+    })
+    .finally(() => {
+      attachmentPending.delete(key)
+    })
+}
+
+/** @returns the cached data URL for an attachment, or an empty string while it loads. */
+export function attachmentImage (sessionId, attachmentId) {
+  return attachmentImages.get(`${String(sessionId)}:${String(attachmentId)}`) ?? ''
+}
+
+/** @returns the joined text of a message's content blocks (tool results and other summaries). */
+export function blocksToText (message) {
+  const parts = messageParts(message)
+  return [parts.text, ...parts.files].filter((part) => part !== '').join('\n')
+}
+
+/** Load the Session catalog, workspaces, and pending interactions. */
+export async function loadState () {
+  try {
+    const payload = await api('/api/state')
+    state.bind = payload.bind ?? ''
+    state.sessions = payload.sessions ?? []
+    state.workspaces = payload.workspaces ?? []
+    state.pending = payload.pending ?? { questions: [], approvals: [] }
+    state.unauthorized = false
+    state.bootError = ''
+    state.booted = true
+    if (state.selected === undefined) {
+      const running = state.sessions.find((session) => session.running)
+      const first = running ?? state.sessions[0]
+      if (first !== undefined) await selectSession(first.id)
+    }
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      state.unauthorized = true
+      state.booted = true
+      return
+    }
+    state.bootError = String(error.message ?? error)
+    state.booted = true
+  }
+}
+
+/** Load the model catalog once. */
+export async function loadModels () {
+  try {
+    const payload = await api('/api/models')
+    state.models = { groups: payload.groups ?? [], defaultSelection: payload.default }
+  } catch {
+    /* the catalog is optional */
+  }
+}
+
+/** Load the permission catalog once. */
+export async function loadPermissions (sessionId) {
+  try {
+    const payload = await api(`/api/permissions?sessionId=${encodeURIComponent(sessionId ?? '')}`)
+    state.permissions = {
+      options: payload.options ?? [],
+      defaultPreset: payload.defaultPreset ?? '',
+      current: payload.current,
+    }
+  } catch {
+    /* the catalog is optional */
+  }
+}
+
+let source
+let refreshTimer
+
+/**
+ * Re-read the catalog soon, coalescing bursts.
+ *
+ * The status broadcast carries no workspace membership, so the grouped sidebar is re-listed from
+ * `/api/state` shortly after it fires.
+ */
+function refreshSoon () {
+  if (refreshTimer !== undefined) return
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = undefined
+    void loadState()
+  }, 1200)
+}
+
+/** Follow one Session: reset the transcript, then stream frames into the store. */
+export async function selectSession (sessionId) {
+  state.selected = sessionId
+  state.events = []
+  state.live = { attemptId: undefined, text: '', reasoning: '' }
+  state.streamError = ''
+  state.hasOlder = true
+  state.loadingOlder = false
+  resetTelemetry()
+  source?.close()
+  source = openStream(sessionId, {
+    onFrame: handleFrame,
+    onPending: (pending) => { state.pending = pending },
+    onSessions: (sessions) => {
+      const known = new Map(state.sessions.map((session) => [session.id, session]))
+      state.sessions = sessions.map((session) => ({ ...session, workspaceId: known.get(session.id)?.workspaceId }))
+      refreshSoon()
+    },
+    onError: (message) => { state.streamError = message },
+    onOpen: () => { state.streamError = '' },
+  })
+  await Promise.all([loadPermissions(sessionId), refreshSelection()])
+}
+
+/**
+ * Fetch one backward page of history and prepend it.
+ *
+ * The opening window is bounded (the Host stops at a turn boundary once its lower bounds are met),
+ * so this is what lets a long Session be read all the way back. Resolves to the height the content
+ * grew by, so the caller can keep the reader's scroll anchor.
+ * @returns the added content height in px.
+ */
+export async function loadOlder () {
+  if (state.loadingOlder || !state.hasOlder) return 0
+  const first = state.events[0]
+  const sessionId = state.selected
+  if (first === undefined || sessionId === undefined) {
+    state.hasOlder = false
+    return 0
+  }
+  state.loadingOlder = true
+  try {
+    const payload = await api(`/api/older?sessionId=${encodeURIComponent(sessionId)}&beforeSeq=${String(first.seq)}`)
+    const records = Array.isArray(payload.records) ? payload.records : []
+    const older = records
+      .filter((record) => record?.type === 'event' && record.event?.seq < first.seq)
+      .map((record) => record.event)
+    if (older.length === 0) {
+      state.hasOlder = false
+      return 0
+    }
+    const known = new Set(state.events.map((event) => event.seq))
+    const fresh = older.filter((event) => !known.has(event.seq))
+    state.events = [...fresh, ...state.events]
+    if (payload.hasMore !== true) state.hasOlder = false
+    return fresh.length
+  } catch (error) {
+    state.streamError = String(error.message ?? error)
+    return 0
+  } finally {
+    state.loadingOlder = false
+  }
+}
+
+/** Resolve which model the Session is currently using. */
+async function refreshSelection () {  try {
+    const payload = await api(`/api/selection?sessionId=${encodeURIComponent(state.selected ?? '')}`)
+    state.selection = payload.selected
+  } catch {
+    state.selection = undefined
+  }
+}
+
+/** Reset the per-Session telemetry counters. */
+function resetTelemetry () {
+  Object.assign(state.telemetry, {
+    turn: 0,
+    step: 0,
+    running: selectedSession.value?.running === true,
+    provider: '',
+    model: '',
+    contextWindow: 0,
+    totalInput: 0,
+    totalOutput: 0,
+    totalCacheRead: 0,
+    totalCacheWrite: 0,
+    totalReasoning: 0,
+    lastInput: 0,
+    tokensPerSecond: 0,
+    streamStartedAt: 0,
+  })
+}
+
+/** Fold one SSE frame into the transcript and the telemetry counters. */
+function handleFrame (frame) {
+  if (frame === null || typeof frame !== 'object') return
+  if (frame.type === 'snapshot') {
+    state.events = (frame.records ?? [])
+      .filter((record) => record?.type === 'event')
+      .map((record) => record.event)
+    state.telemetry.running = selectedSession.value?.running === true
+    return
+  }
+  if (frame.type === 'event') {
+    foldTelemetry(frame.event)
+    state.events.push(frame.event)
+    return
+  }
+  if (frame.type === 'assistant-stream') {
+    foldStream(frame.frame)
+  }
+}
+
+/** Track turns, steps, usage, model, and context occupancy from durable events. */
+function foldTelemetry (event) {
+  const data = event.data ?? {}
+  const telemetry = state.telemetry
+  if (event.type === 'turn/start') {
+    telemetry.turn = Number(data.turn ?? telemetry.turn)
+    telemetry.running = true
+    return
+  }
+  if (event.type === 'turn/end') {
+    telemetry.running = false
+    return
+  }
+  if (event.type === 'step/start') {
+    telemetry.step = Number(data.step ?? telemetry.step)
+    return
+  }
+  if (event.type === 'assistant/message') {
+    const usage = data.usage
+    if (usage !== undefined) {
+      telemetry.totalInput += Number(usage.inputTokens ?? 0)
+      telemetry.totalOutput += Number(usage.outputTokens ?? 0)
+      telemetry.totalCacheRead += Number(usage.cacheReadTokens ?? 0)
+      telemetry.totalCacheWrite += Number(usage.cacheWriteTokens ?? 0)
+      telemetry.totalReasoning += Number(usage.reasoningTokens ?? 0)
+      telemetry.lastInput = Number(usage.inputTokens ?? 0) + Number(usage.cacheReadTokens ?? 0) + Number(usage.cacheWriteTokens ?? 0)
+      const elapsed = telemetry.streamStartedAt === 0 ? 0 : (Date.now() - telemetry.streamStartedAt) / 1000
+      if (elapsed > 0.2 && Number(usage.outputTokens ?? 0) > 0) {
+        telemetry.tokensPerSecond = Number(usage.outputTokens) / elapsed
+      }
+    }
+    return
+  }
+  if (event.type === 'request/context') {
+    telemetry.provider = String(data.provider ?? telemetry.provider)
+    telemetry.model = String(data.model ?? telemetry.model)
+    if (typeof data.contextWindow === 'number') telemetry.contextWindow = data.contextWindow
+    return
+  }
+  if (event.type === 'request/header') {
+    const config = data.header?.config
+    if (config !== undefined) {
+      telemetry.provider = String(config.provider ?? telemetry.provider)
+      telemetry.model = String(config.model ?? telemetry.model)
+    }
+  }
+}
+
+/** Track the live assistant stream so text appears while the model is still writing. */
+function foldStream (frame) {
+  const telemetry = state.telemetry
+  if (frame.type === 'start') {
+    state.live = { attemptId: frame.attemptId, text: '', reasoning: '' }
+    telemetry.streamStartedAt = Date.now()
+    telemetry.running = true
+    return
+  }
+  if (frame.type === 'chunk') {
+    const chunk = frame.chunk ?? {}
+    if (chunk.type === 'text-delta') state.live.text += String(chunk.text ?? '')
+    else if (chunk.type === 'reasoning-delta') state.live.reasoning += String(chunk.text ?? '')
+    return
+  }
+  if (frame.type === 'end') {
+    state.live = { attemptId: undefined, text: '', reasoning: '' }
+  }
+}
+
+/**
+ * Send a message into the selected Session.
+ * @param content - prompt content parts (`text`, optional `image` attachments).
+ * @param mode - `queue` or `steer`.
+ */
+export async function sendPrompt (content, mode = 'queue') {
+  state.actionError = ''
+  try {
+    await api('/api/send', { method: 'POST', body: { sessionId: state.selected, content, mode } })
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+    throw error
+  }
+}
+
+/** Stop the running turn. */
+export async function cancelTurn () {
+  try {
+    await api('/api/cancel', { method: 'POST', body: { sessionId: state.selected } })
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  }
+}
+
+/** Answer one pending question. */
+export async function answerQuestion (callId, answers) {
+  try {
+    await api('/api/answer', { method: 'POST', body: { callId, answers } })
+    state.pending.questions = state.pending.questions.filter((question) => question.callId !== callId)
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  }
+}
+
+/** Switch the Session's model. */
+export async function selectModel (selection) {
+  try {
+    await api('/api/select-model', { method: 'POST', body: { sessionId: state.selected, ...selection } })
+    state.selection = selection
+    state.actionError = ''
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  }
+}
+
+/** Switch the Session's permission preset. */
+export async function selectPermission (name) {
+  try {
+    await api('/api/permission', { method: 'POST', body: { sessionId: state.selected, name } })
+    state.permissions.current = name
+    state.actionError = ''
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  }
+}
+
+/** Media types the Host admits as prompt images. */
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+/**
+ * Read one picked or pasted image into the shape the Host admits.
+ *
+ * Image bytes travel *inside* the prompt (`{ type: 'image', mediaType, data, name? }`), exactly as
+ * the Desktop composer submits them, and the Host stores them while admitting the submission. No
+ * pre-upload round trip is involved, so there is nothing to clean up when the draft is discarded.
+ * @param file - the picked or pasted image.
+ * @returns the staged attachment: bytes, media type, and a local preview URL.
+ */
+export async function stageImage (file) {
+  if (!IMAGE_MEDIA_TYPES.has(file.type)) throw new Error(`不支持的图片类型：${file.type === '' ? '未知' : file.type}`)
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => { resolve(String(reader.result)) }
+    reader.onerror = () => { reject(new Error('读取图片失败')) }
+    reader.readAsDataURL(file)
+  })
+  return {
+    mediaType: file.type,
+    data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+    name: file.name === '' ? undefined : file.name,
+    preview: dataUrl,
+  }
+}
