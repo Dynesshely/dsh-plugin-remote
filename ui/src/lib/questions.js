@@ -10,13 +10,14 @@
 export const QUESTION_TOOLS = new Set(['ask_user_question', 'request_user_input'])
 
 /**
- * Split the desktop's "(Recommended)" marker off an option label.
+ * Split the desktop's recommended marker off an option label.
  * @param label - raw option label.
  * @returns `{ label, recommended }`.
  */
 export function splitRecommended (label) {
   const text = String(label ?? '')
-  const marker = /\s*[（(]\s*recommended\s*[)）]\s*$/iu
+  // The same marker set the Desktop matches (`parseRecommendedLabel`): both spellings, either paren.
+  const marker = /\s*[（(]\s*(?:recommended|推荐)\s*[)）]\s*$/iu
   if (!marker.test(text)) return { label: text, recommended: false }
   return { label: text.replace(marker, '').trim(), recommended: true }
 }

@@ -51,6 +51,7 @@ console.log('Remote Control question model')
 check('the "(Recommended)" marker becomes a flag', () => {
   assert.deepEqual(splitRecommended('只改 UI（Recommended）'), { label: '只改 UI', recommended: true })
   assert.deepEqual(splitRecommended('前后端都改 (recommended)'), { label: '前后端都改', recommended: true })
+  assert.deepEqual(splitRecommended('先做 P0 骨架（推荐）'), { label: '先做 P0 骨架', recommended: true }, 'the Chinese marker counts too')
   assert.deepEqual(splitRecommended('普通选项'), { label: '普通选项', recommended: false })
 })
 
