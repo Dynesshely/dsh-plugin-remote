@@ -41,9 +41,11 @@
 - **提问（`ask_user_question`）**：这个工具调用不再渲染成 JSON 工具卡，而是按桌面端的样子渲染成**提问卡片**（`QuestionCard.vue`）——顶部 eyebrow + 标题（`header` 为主、`question` 为副）、选项行**单选显示序号 / 多选显示勾选框**（选中的行高亮描边）、`(Recommended)` 标记从标签里剥离并显示成「推荐」chip、描述文字 11px 次级色、末尾一个自由输入框（「其他…」）、多个问题时底部有 `i/n` 分页与上下一条按钮，右下角是「提交」。
   - **两处同一组件**：转录里那个工具调用的位置（卡片可原地作答）与输入区上方的 dock（`PendingPanel`），所以滚动到别处也不会漏答。
   - **作答链路**：`dsh-tool-ask-user` 用的是 `wait: { callId: exec.callId }`，因此提问请求的 callId **就是工具调用的 callId**；于是转录卡片能用 `tool/call` 的 callId 去 `state.pending.questions` 里认领状态——pending 时可交互，一旦不再 pending（本地或桌面已答、或超时）就自动变成**只读的作答记录**（按已收到的工具结果回显选中项与自定义文本）。
-  - **捕获路径（踩过的两个坑）**：
-    1. **必须 `prepend`**。提问与审批是 waterfall，而 Cordis 的语义是「outermost-first，且**不调用 `next()` 的监听器会否决链上其余监听器**」（原话：*a listener that does not call `next()` vetoes the rest of the chain*）。桌面端 answerer 先注册、拿到用户答案后直接返回而不调 `next()`，于是任何**追加**在它后面的观察者永远不会被调用——实测表现就是 `/api/diagnose` 计数全为 0、页面卡片只读。现在四个注册（提问/审批 × 逐 agent/根）都用 `{ prepend: true }` 插到链首，记录完再 `next()`，桌面面板依旧权威。
-    2. **不能只靠 `agent/created`**。这类事件按 Agent 作用域派发（`dsh-scope` 的 invariant 用 `args[0].agent` 取路由键），而桌面启动时会先恢复你正在看的会话，**它的 agent 早于 profile bundle 加载完成就已存在**，`agent/created` 不会再为它触发。所以加载时还要用 `ctx.get('agents').list()` **枚举已存在的 agent 并逐个挂载**，另在本插件（无作用域标签）的上下文上再挂一份兜底（无标签监听器对所有作用域派发都被接纳）。三条路按 callId 幂等去重，`GET /api/diagnose` 可核对计数与已挂载的 agent。
+  - **捕获路径（踩过的三个坑）**：
+    1. **主路径是会话日志，而不是瀑布**。提问工具调用本身就是一条持久 `tool/call` 事件：`data.callId` 就是答案要路由回去的那个 id，`data.arguments` 就是问题本体。所以监听 `session/event`（`emit` 语义——**所有被接纳的监听器都会跑，没有任何否决语义**）即可稳定捕获，作答仍走 `ctx.userQuestions.answer(agent, callId, …)`，配套的 `tool/result` 一到（本地/桌面/超时结算都算）自动退场。
+    2. **waterfall 观察者必须 `prepend`**。Cordis 的 waterfall 是 outermost-first，且**不调 `next()` 的监听器会否决链上其余监听器**（原话：*a listener that does not call `next()` vetoes the rest of the chain*）。桌面 answerer 先注册、拿到答案直接返回，于是追加在它后面的观察者永远轮不到。这条瀑布路径现在仍保留（`{ prepend: true }`）作为**次要来源**，覆盖不经过工具调用的提问。
+    3. **实测该瀑布载荷里没有 `wait`**：`rootQuestions` 会 +1、`missingWait` 也会 +1（收到事件但拿不到 `callId`）——这正是改用日志路径的直接原因。`/api/diagnose` 的 `lastRequest` 会记录最近一次瀑布载荷的 keys 便于复核。
+    另外这类事件按 Agent 作用域派发（`dsh-scope` 的 invariant 用 `args[0].agent` 取路由键），而桌面启动会先恢复你正在看的会话，**它的 agent 早于 profile bundle 加载完成就已存在**，`agent/created` 不会再触发——所以加载时还要用 `ctx.get('agents').list()` 枚举已存在的 agent。`GET /api/diagnose` 可核对 `attached` / `liveAgents` / `sessionCalls` / `rootQuestions` / `missingWait`。
   - 交互与桌面一致：单选点一下即选中并自动跳到下一个问题，多选是切换；Enter 提交；未答完时提交按钮禁用并把焦点跳回缺答的那一题。
   - **`(Recommended)` 标记**：桌面端的用途不是显示徽标，而是 `recommendedFirstOption` —— **把第一个被标记的选项预选为草稿**（用户仍需提交）。这里照做（`initialDraft`），并额外在该选项旁显示一个「推荐」chip 说明它为什么一开始就是选中态。
 - **审批**：只展示不代答（见下）。

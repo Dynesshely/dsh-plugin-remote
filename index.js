@@ -914,45 +914,75 @@ export function apply (ctx, config) {
     })
   }, 'remote-control: listener')
 
-  // Pending interactions are dispatched on the requesting Agent's scope. They are observed in two
-  // ways: per-agent listeners on `agent.ctx` (the documented placement) and, as a safety net, on
-  // this plugin's own context — an untagged listener is admitted for every scoped dispatch, so the
-  // second registration also covers a request whose agent was never announced.
+  // Pending interactions are captured from the Session log's own append feed (`session/event`), which
+  // is an `emit`: every listener runs, so nothing can veto the observation. The `user-questions/request`
+  // waterfall is kept as a secondary source for questions that never reach a tool call.
   const agentDisposers = new Map()
-  const capture = { attached: [], agentCreated: 0, rootQuestions: 0, missingWait: 0 }
+  const capture = { attached: [], agentCreated: 0, rootQuestions: 0, missingWait: 0, sessionCalls: 0, lastRequest: undefined }
+
+  /** Tool names whose calls carry a user question. */
+  const QUESTION_TOOLS = new Set(['ask_user_question', 'request_user_input'])
+
+  /**
+   * @param raw - one question from a request or a tool argument.
+   * @returns the pending-record shape.
+   */
+  const mapQuestion = (raw) => ({
+    id: String(raw?.id ?? ''),
+    question: String(raw?.question ?? ''),
+    header: typeof raw?.header === 'string' ? raw.header : undefined,
+    detail: typeof raw?.detail === 'string' ? raw.detail : undefined,
+    multiSelect: raw?.multiSelect === true || raw?.multi_select === true,
+    options: Array.isArray(raw?.options)
+      ? raw.options.map((option) => ({ label: String(option?.label ?? ''), description: option?.description }))
+      : [],
+  })
+
+  /** @returns the live agent for a Session, which is what the answer call needs. */
+  const agentOf = (sessionId) => ctx.get('agents')?.get?.(sessionId)
+
   ctx.effect(() => {
     /**
-     * Record one question request, keyed by the tool call its answer must go back to.
-     * @param agent - the requesting agent, when the dispatch carried one.
-     * @param request - the `user-questions/request` payload.
+     * Record one pending question, keyed by the tool call its answer must go back to.
+     * @param owner - the requesting agent, when known.
+     * @param callId - the tool call id the answer is routed by.
+     * @param rawQuestions - questions in either the request or the tool-argument shape.
+     * @param sessionId - owning Session id, when the caller knows it.
      */
-    const recordQuestion = (agent, request) => {
-      const callId = request?.wait?.callId
-      if (callId === undefined) {
-        // Without the tool-call id an answer cannot be routed, so only a counter is kept for
-        // diagnosis; the desktop panel can still answer that question.
-        capture.missingWait += 1
-        return
-      }
-      const owner = agent ?? request?.agent
+    const recordQuestions = (owner, callId, rawQuestions, sessionId) => {
+      const list = Array.isArray(rawQuestions) ? rawQuestions.map(mapQuestion) : []
+      if (list.length === 0) return
       questions.set(String(callId), {
         callId: String(callId),
-        sessionId: String(owner?.id ?? ''),
-        questions: (request.questions ?? []).map((item) => ({
-          id: String(item.id),
-          question: String(item.question ?? ''),
-          header: typeof item.header === 'string' ? item.header : undefined,
-          detail: typeof item.detail === 'string' ? item.detail : undefined,
-          multiSelect: item.multiSelect === true,
-          options: Array.isArray(item.options)
-            ? item.options.map((option) => ({ label: String(option.label ?? ''), description: option.description }))
-            : [],
-        })),
+        sessionId: String(sessionId ?? owner?.id ?? ''),
+        questions: list,
         at: Date.now(),
         agent: owner,
         answerable: owner !== undefined,
       })
       broadcast('pending', pendingPayload())
+    }
+
+    /**
+     * Record one question request seen on the waterfall, which carries the tool call it belongs to.
+     * @param agent - the requesting agent, when the dispatch carried one.
+     * @param request - the `user-questions/request` payload.
+     */
+    const recordQuestion = (agent, request) => {
+      capture.lastRequest = {
+        keys: Object.keys(request ?? {}),
+        wait: request?.wait === undefined ? undefined : Object.keys(request.wait),
+        agentId: String((agent ?? request?.agent)?.id ?? ''),
+      }
+      const callId = request?.wait?.callId
+      if (callId === undefined) {
+        // Without the tool-call id an answer cannot be routed; the log feed below usually has already
+        // recorded this question under the tool-call id, so only a counter is kept here.
+        capture.missingWait += 1
+        return
+      }
+      const owner = agent ?? request?.agent
+      recordQuestions(owner, String(callId), request.questions, owner?.id)
     }
 
     /**
@@ -1050,6 +1080,37 @@ export function apply (ctx, config) {
       recordApproval(request?.agent, request)
       return next()
     }, { prepend: true })
+    /**
+     * The primary capture path: the Session log's own append feed.
+     *
+     * A question tool call is a durable `tool/call` event, so the questions and the call id they must
+     * be answered under are both available from the log — no waterfall, no scope filter, and nothing
+     * can veto the observation (`emit` runs every admitted listener). The matching `tool/result`
+     * retires the record, whether this page, the desktop, or a timeout settled it.
+     */
+    const offSessionEvents = ctx.on('session/event', (session, event) => {
+      const type = event?.type
+      if (type === 'tool/call') {
+        if (!QUESTION_TOOLS.has(String(event.data?.name ?? ''))) return
+        const callId = String(event.data?.callId ?? '')
+        if (callId === '') return
+        let args = event.data?.arguments
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args)
+          } catch {
+            return
+          }
+        }
+        capture.sessionCalls += 1
+        recordQuestions(agentOf(String(session?.id ?? '')), callId, args?.questions, session?.id)
+        return
+      }
+      if (type === 'tool/result') {
+        const callId = String(event.data?.message?.toolCallId ?? '')
+        if (callId !== '' && questions.delete(callId)) broadcast('pending', pendingPayload())
+      }
+    })
     const offStatus = ctx.on('api-session/status', () => {
       void sessionsOf(ctx).then((sessions) => {
         broadcast('sessions', { sessions })
@@ -1060,6 +1121,7 @@ export function apply (ctx, config) {
       offDisposed()
       offRootQuestions()
       offRootApprovals()
+      offSessionEvents()
       offStatus()
       for (const disposers of agentDisposers.values()) {
         for (const dispose of disposers) {

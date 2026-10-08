@@ -110,7 +110,7 @@ function createHost () {
       }
     },
     get: (key) => {
-      if (key === 'agents') return { list: () => liveAgents }
+      if (key === 'agents') return { list: () => liveAgents, get: (id) => liveAgents.find((agent) => agent.id === id) }
       if (key === 'userQuestions') {
         return {
           answer: (agent, callId, answer) => {
@@ -180,8 +180,8 @@ function createHost () {
     makeAgent,
     DESKTOP_ANSWER,
     /** Emit one root-scope event to the plugin's listeners. */
-    emit: (name, payload) => {
-      for (const fn of handlers.get(name) ?? []) fn(payload)
+    emit: (name, ...payload) => {
+      for (const fn of handlers.get(name) ?? []) fn(...payload)
     },
     /** Run one waterfall exactly like Cordis: outermost-first, and a listener that skips `next()` wins. */
     emitWaterfall: (name, payload) => {
@@ -536,6 +536,49 @@ await check('older history pages backwards from the loaded window', async () => 
 
   const bad = await fetch(`${base}/api/older?sessionId=s1`, { headers: cookie })
   assert.equal(bad.status, 400)
+})
+
+await check('a question tool call is captured from the session log feed', async () => {
+  // The primary path, and the one that cannot be vetoed: a durable `tool/call` event is enough.
+  host.emit('session/event', { id: 's1' }, {
+    type: 'tool/call',
+    seq: 42,
+    data: {
+      callId: 'call-8',
+      name: 'ask_user_question',
+      arguments: JSON.stringify({ questions: [{ id: 'pick', header: '选一个', question: '哪个？', options: [{ label: 'A（Recommended）' }, { label: 'B' }] }] }),
+    },
+  })
+  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const record = state.pending.questions.find((question) => question.callId === 'call-8')
+  assert.notEqual(record, undefined, 'captured from the log without any waterfall')
+  assert.equal(record.sessionId, 's1')
+  assert.equal(record.answerable, true, 'the live agent routes the answer')
+  assert.equal(record.questions[0].multiSelect, false)
+  assert.equal(record.questions[0].options.length, 2)
+
+  const answered = await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-8', answers: [{ id: 'pick', selected: ['A（Recommended）'] }] }),
+  })
+  assert.equal(answered.status, 200, await answered.clone().text())
+  assert.equal(host.calls.answer.at(-1).agentId, 's1')
+
+  // A question answered elsewhere (or timed out) leaves the pending list when its result lands.
+  host.emit('session/event', { id: 's1' }, {
+    type: 'tool/call',
+    seq: 44,
+    data: { callId: 'call-7', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'x', question: 'q', options: [] }] }) },
+  })
+  let after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(after.pending.questions.some((question) => question.callId === 'call-7'), true)
+  host.emit('session/event', { id: 's1' }, { type: 'tool/result', seq: 45, data: { message: { toolCallId: 'call-7', content: [] } } })
+  after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(after.pending.questions.some((question) => question.callId === 'call-7'), false, 'a settled tool call leaves the pending list')
+
+  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  assert.equal(diagnose.capture.sessionCalls, 2)
 })
 
 await check('a question is captured even though the desktop answerer vetoes the rest', async () => {
