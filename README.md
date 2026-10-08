@@ -41,6 +41,7 @@
 - **提问（`ask_user_question`）**：这个工具调用不再渲染成 JSON 工具卡，而是按桌面端的样子渲染成**提问卡片**（`QuestionCard.vue`）——顶部 eyebrow + 标题（`header` 为主、`question` 为副）、选项行**单选显示序号 / 多选显示勾选框**（选中的行高亮描边）、`(Recommended)` 标记从标签里剥离并显示成「推荐」chip、描述文字 11px 次级色、末尾一个自由输入框（「其他…」）、多个问题时底部有 `i/n` 分页与上下一条按钮，右下角是「提交」。
   - **两处同一组件**：转录里那个工具调用的位置（卡片可原地作答）与输入区上方的 dock（`PendingPanel`），所以滚动到别处也不会漏答。
   - **作答链路**：`dsh-tool-ask-user` 用的是 `wait: { callId: exec.callId }`，因此提问请求的 callId **就是工具调用的 callId**；于是转录卡片能用 `tool/call` 的 callId 去 `state.pending.questions` 里认领状态——pending 时可交互，一旦不再 pending（本地或桌面已答、或超时）就自动变成**只读的作答记录**（按已收到的工具结果回显选中项与自定义文本）。
+  - **捕获路径（踩过的坑）**：提问与审批是**按 Agent 作用域**派发的事件（`dsh-scope` 的 invariant 用 `args[0].agent` 取路由键）。因此插件必须挂到**那个 agent 自己的 `agent.ctx`** 上；而桌面启动时会先恢复你正在看的那个会话，**它的 agent 在 profile bundle 加载完成之前就已存在**，`agent/created` 不会再为它触发一次——只靠 `agent/created` 注册就会漏掉"你正在用的这个会话"。所以现在①在加载时用 `ctx.get('agents').list()` **枚举已存在的 agent 并逐个挂载**，②`agent/created` 覆盖之后新建的 agent，③另外在本插件自己的（无作用域标签的）上下文上再挂一份作为**兜底**（无标签监听器对所有作用域派发都被接纳），三条路都按 callId 幂等去重。`GET /api/diagnose` 可以把这三条的计数与已挂载的 agent 列出来核对。
   - 交互与桌面一致：单选点一下即选中并自动跳到下一个问题，多选是切换；Enter 提交；未答完时提交按钮禁用并把焦点跳回缺答的那一题。
 - **审批**：只展示不代答（见下）。
 
@@ -118,6 +119,7 @@ pwsh -File plugins\remote-control\tools\firewall-remote-control.ps1 -Remove
 | `GET /api/models`、`GET /api/selection?sessionId=` | 模型目录与当前选择 |
 | `GET /api/attachment?sessionId=&attachmentId=` | 从会话日志取回一张图片的字节（转录/预览用） |
 | `GET /api/older?sessionId=&beforeSeq=` | 向前翻一页历史（`page` 远端），返回 `{records, hasMore}` |
+| `GET /api/diagnose` | 自检：提问/审批的捕获计数、已挂上监听的 agent id、当前挂起的提问（含 `answerable`） |
 | `POST /api/select-model` | 切换模型 |
 | `GET /api/permissions?sessionId=`、`POST /api/permission` | 权限预设目录与切换 |
 | `POST /api/attach` | 图片（data URL）单独入附件库，返回 `ImageAttachmentRef`（SPA 已改走内联字节，此路由保留给脚本使用） |
@@ -153,7 +155,7 @@ pwsh -File plugins\remote-control\tools\firewall-remote-control.ps1 -Remove
 
 ```bash
 # 从工作区根目录
-node plugins/remote-control/tools/test-remote-control.mjs      # Host：鉴权、路由、SSE、模型/权限、附件、内联图片、翻页
+node plugins/remote-control/tools/test-remote-control.mjs      # Host：鉴权、路由、SSE、模型/权限、附件、内联图片、翻页、提问/审批捕获
 node plugins/remote-control/tools/test-remote-ui-store.mjs     # 转录归并：工具分组、上下文注记、图片
 node plugins/remote-control/tools/test-remote-ui-questions.mjs # 提问：参数/作答解析、推荐标记、转录认领
 node plugins/remote-control/tools/test-remote-ui-rail.mjs      # 导航轨：刻度、激活判定、格子几何

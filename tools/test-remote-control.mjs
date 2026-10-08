@@ -29,6 +29,35 @@ function createHost () {
   const calls = { list: 0, prompt: [], cancel: [], follow: [], page: [], answer: [], saveImages: [], selectModel: [], setPreset: [], attachments: [] }
   const sessionObject = { id: 's1', requestHeader: () => ({ config: { provider: 'pi', model: 'test-model' } }) }
 
+  /**
+   * Agents that are already live when the plugin is applied.
+   *
+   * This mirrors the desktop: it reopens the Session the user is looking at during startup, so that
+   * Session's agent exists before the profile's bundles finish applying and `agent/created` never
+   * fires for it again.
+   */
+  const agentScopes = new Map()
+  const liveAgents = []
+  /** @returns an agent handle with a per-agent event scope, like a real AgentContext. */
+  function makeAgent (id) {
+    const scoped = new Map()
+    agentScopes.set(id, scoped)
+    const agent = {
+      id,
+      ctx: {
+        on: (name, fn) => {
+          const set = scoped.get(name) ?? new Set()
+          set.add(fn)
+          scoped.set(name, set)
+          return () => set.delete(fn)
+        },
+      },
+    }
+    liveAgents.push(agent)
+    return agent
+  }
+  makeAgent('s1')
+
   const sessions = [
     { sessionId: 's1', running: true, blank: false, updatedAt: 3, cwd: 'C:\\work\\alpha', projections: { values: { title: 'Alpha session' } } },
     { sessionId: 's2', running: false, blank: false, updatedAt: 2, cwd: '/home/u/beta' },
@@ -69,6 +98,7 @@ function createHost () {
       return () => set.delete(fn)
     },
     get: (key) => {
+      if (key === 'agents') return { list: () => liveAgents }
       if (key === 'userQuestions') {
         return {
           answer: (agent, callId, answer) => {
@@ -133,10 +163,17 @@ function createHost () {
     logs,
     calls,
     effects,
+    liveAgents,
+    agentScopes,
+    makeAgent,
     /** Emit one root-scope event to the plugin's listeners. */
     emit: (name, payload) => {
       for (const fn of handlers.get(name) ?? []) fn(payload)
     },
+    /** @returns the plugin's listener registered on the root scope for one event. */
+    rootListener: (name) => [...(handlers.get(name) ?? [])][0],
+    /** @returns the plugin's listener registered on one live agent's scope. */
+    agentListener: (agentId, name) => [...(agentScopes.get(agentId)?.get(name) ?? [])][0],
   }
 }
 
@@ -478,22 +515,12 @@ await check('older history pages backwards from the loaded window', async () => 
   assert.equal(bad.status, 400)
 })
 
-await check('a pending question is captured, passes through, and is answerable', async () => {
-  const scoped = new Map()
-  const agent = {
-    id: 's1',
-    ctx: {
-      on: (name, fn) => {
-        const set = scoped.get(name) ?? new Set()
-        set.add(fn)
-        scoped.set(name, set)
-        return () => set.delete(name)
-      },
-    },
-  }
-  host.emit('agent/created', { agent })
-  const listener = [...(scoped.get('user-questions/request') ?? [])][0]
-  assert.equal(typeof listener, 'function', 'the plugin subscribed to the question waterfall')
+await check('a question from an already-running agent is captured and answerable', async () => {
+  // Regression: the desktop reopens its Session before profile bundles apply, so its agent never
+  // emits `agent/created`. Capture must work anyway — the plugin attaches to live agents it finds.
+  assert.equal(host.liveAgents.length, 1)
+  const listener = host.agentListener('s1', 'user-questions/request')
+  assert.equal(typeof listener, 'function', 'the plugin subscribed to the live agent’s waterfall')
 
   let passedThrough = false
   const outcome = await listener({
@@ -523,21 +550,38 @@ await check('a pending question is captured, passes through, and is answerable',
   assert.equal(after.pending.questions.length, 0, 'the answered question left the pending list')
 })
 
+await check('the root listener is a safety net for unannounced agents', async () => {
+  const listener = host.rootListener('user-questions/request')
+  assert.equal(typeof listener, 'function', 'the plugin also subscribed on its own context')
+  const agent = host.makeAgent('s9')
+  assert.equal(host.agentListener('s9', 'user-questions/request'), undefined, 'never announced, so no per-agent listener')
+  const outcome = await listener({
+    agent,
+    questions: [{ id: 'q2', question: 'Root path?', options: [{ label: 'Yes' }] }],
+    wait: { callId: 'call-2', timed: true },
+  }, () => Promise.resolve('local-answer'))
+  assert.equal(outcome, 'local-answer')
+  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const record = state.pending.questions.find((question) => question.callId === 'call-2')
+  assert.equal(record?.sessionId, 's9', 'the request’s own agent identified the Session')
+  assert.equal(record?.answerable, true)
+
+  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  assert.deepEqual(diagnose.capture.attached, ['s1'])
+  assert.equal(diagnose.capture.rootQuestions > 0, true)
+  assert.equal(diagnose.questions.some((question) => question.callId === 'call-2'), true)
+  assert.equal(diagnose.liveAgents.includes('s1'), true)
+
+  await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-2', answers: [{ id: 'q2', selected: ['Yes'] }] }),
+  })
+})
+
 await check('an approval is surfaced but keeps the desktop decision', async () => {
-  const scoped = new Map()
-  const agent = {
-    id: 's1',
-    ctx: {
-      on: (name, fn) => {
-        const set = scoped.get(name) ?? new Set()
-        set.add(fn)
-        scoped.set(name, set)
-        return () => set.delete(name)
-      },
-    },
-  }
-  host.emit('agent/created', { agent })
-  const listener = [...(scoped.get('approval/request') ?? [])][0]
+  const listener = host.agentListener('s1', 'approval/request')
+  assert.equal(typeof listener, 'function', 'the live agent is observed for approvals too')
   let passedThrough = false
   const outcome = await listener({ toolName: 'bash', reason: 'rm -rf build' }, () => {
     passedThrough = true
