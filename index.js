@@ -982,16 +982,20 @@ export function apply (ctx, config) {
       const id = String(agent.id)
       if (agentDisposers.has(id)) return
       try {
+        // `prepend` is load-bearing: a waterfall runs outermost-first, and the desktop answerer —
+        // registered earlier and returning the user's answer without calling `next()` — vetoes
+        // everything behind it. Observing from the front is what lets the request be recorded at all,
+        // while `next()` keeps the desktop panel authoritative.
         const disposers = [
           agent.ctx.on('user-questions/request', (request, next) => {
             recordQuestion(agent, request)
             return next()
-          }),
+          }, { prepend: true }),
           // Observed only: the decision chain stays with the desktop answerer.
           agent.ctx.on('approval/request', (request, next) => {
             recordApproval(agent, request)
             return next()
-          }),
+          }, { prepend: true }),
         ]
         agentDisposers.set(id, disposers)
         capture.attached.push(id)
@@ -1040,12 +1044,12 @@ export function apply (ctx, config) {
       capture.rootQuestions += 1
       recordQuestion(request?.agent, request)
       return next()
-    })
+    }, { prepend: true })
     // Observed only, like the per-agent registration.
     const offRootApprovals = ctx.on('approval/request', (request, next) => {
       recordApproval(request?.agent, request)
       return next()
-    })
+    }, { prepend: true })
     const offStatus = ctx.on('api-session/status', () => {
       void sessionsOf(ctx).then((sessions) => {
         broadcast('sessions', { sessions })

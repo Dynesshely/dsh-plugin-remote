@@ -58,6 +58,13 @@ function createHost () {
   }
   makeAgent('s1')
 
+  // Stands in for the desktop answerer: registered before the plugin (so a listener that does not
+  // prepend ends up behind it) and returning the user's answer WITHOUT calling `next()`, which vetoes
+  // the rest of the waterfall — exactly the live behaviour that hid every question from this plugin.
+  const DESKTOP_ANSWER = 'desktop-answer'
+  handlers.set('user-questions/request', [() => Promise.resolve(DESKTOP_ANSWER)])
+  handlers.set('approval/request', [() => Promise.resolve('allowed-once')])
+
   const sessions = [
     { sessionId: 's1', running: true, blank: false, updatedAt: 3, cwd: 'C:\\work\\alpha', projections: { values: { title: 'Alpha session' } } },
     { sessionId: 's2', running: false, blank: false, updatedAt: 2, cwd: '/home/u/beta' },
@@ -91,11 +98,16 @@ function createHost () {
   const ctx = {
     logger: { info: (line) => logs.push(String(line)), warn: (line) => logs.push(String(line)) },
     effect: (fn) => { const off = fn(); effects.push(off) },
-    on: (name, fn) => {
-      const set = handlers.get(name) ?? new Set()
-      set.add(fn)
-      handlers.set(name, set)
-      return () => set.delete(fn)
+    on: (name, fn, options) => {
+      const list = handlers.get(name) ?? []
+      handlers.set(name, list)
+      // Cordis semantics: `prepend` unshifts, so the listener runs outermost-first.
+      if (options === true || options?.prepend === true) list.unshift(fn)
+      else list.push(fn)
+      return () => {
+        const index = list.indexOf(fn)
+        if (index >= 0) list.splice(index, 1)
+      }
     },
     get: (key) => {
       if (key === 'agents') return { list: () => liveAgents }
@@ -166,12 +178,23 @@ function createHost () {
     liveAgents,
     agentScopes,
     makeAgent,
+    DESKTOP_ANSWER,
     /** Emit one root-scope event to the plugin's listeners. */
     emit: (name, payload) => {
       for (const fn of handlers.get(name) ?? []) fn(payload)
     },
-    /** @returns the plugin's listener registered on the root scope for one event. */
-    rootListener: (name) => [...(handlers.get(name) ?? [])][0],
+    /** Run one waterfall exactly like Cordis: outermost-first, and a listener that skips `next()` wins. */
+    emitWaterfall: (name, payload) => {
+      const list = [...(handlers.get(name) ?? [])]
+      const next = () => {
+        const fn = list.shift()
+        if (fn === undefined) return Promise.resolve(undefined)
+        return Promise.resolve(fn(payload, next))
+      }
+      return next()
+    },
+    /** @returns the plugin's listener on the root scope — first, because the plugin prepends. */
+    rootListener: (name) => (handlers.get(name) ?? [])[0],
     /** @returns the plugin's listener registered on one live agent's scope. */
     agentListener: (agentId, name) => [...(agentScopes.get(agentId)?.get(name) ?? [])][0],
   }
@@ -515,6 +538,34 @@ await check('older history pages backwards from the loaded window', async () => 
   assert.equal(bad.status, 400)
 })
 
+await check('a question is captured even though the desktop answerer vetoes the rest', async () => {
+  // Regression for the live failure: the desktop answerer is registered first and returns without
+  // calling `next()`, so a listener that is merely appended never runs. The plugin must prepend.
+  const outcome = await host.emitWaterfall('user-questions/request', {
+    agent: host.liveAgents[0],
+    questions: [{ id: 'q3', question: 'Chain order?', options: [{ label: 'A' }, { label: 'B' }] }],
+    wait: { callId: 'call-3', timed: true },
+  })
+  assert.equal(outcome, host.DESKTOP_ANSWER, 'the desktop answerer still owns the decision')
+
+  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const record = state.pending.questions.find((question) => question.callId === 'call-3')
+  assert.equal(record !== undefined, true, 'the question was captured before the veto')
+  assert.equal(record.sessionId, 's1')
+
+  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  assert.equal(diagnose.questions.some((question) => question.callId === 'call-3'), true)
+
+  const answered = await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-3', answers: [{ id: 'q3', selected: ['B'] }] }),
+  })
+  const body = await answered.text()
+  assert.equal(answered.status, 200, body)
+  assert.equal(host.calls.answer.at(-1).agentId, 's1', 'the request’s agent routed the answer')
+})
+
 await check('a question from an already-running agent is captured and answerable', async () => {
   // Regression: the desktop reopens its Session before profile bundles apply, so its agent never
   // emits `agent/created`. Capture must work anyway — the plugin attaches to live agents it finds.
@@ -531,8 +582,7 @@ await check('a question from an already-running agent is captured and answerable
   assert.equal(passedThrough, true)
 
   const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
-  assert.equal(state.pending.questions.length, 1)
-  assert.equal(state.pending.questions[0].callId, 'call-1')
+  assert.equal(state.pending.questions.length, 1, `pending: ${state.pending.questions.map((question) => question.callId).join(',')}`)
   assert.deepEqual(state.pending.questions[0].questions[0].options, [{ label: 'A' }, { label: 'B' }])
 
   const answered = await fetch(`${base}/api/answer`, {
@@ -540,11 +590,10 @@ await check('a question from an already-running agent is captured and answerable
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-1', answers: [{ id: 'q1', selected: ['B'] }] }),
   })
-  assert.equal(answered.status, 200)
-  assert.equal(host.calls.answer.length, 1)
-  assert.equal(host.calls.answer[0].callId, 'call-1')
-  assert.equal(host.calls.answer[0].agentId, 's1')
-  assert.deepEqual(host.calls.answer[0].answer, { answers: [{ id: 'q1', selected: ['B'] }] })
+  assert.equal(answered.status, 200, await answered.text())
+  assert.equal(host.calls.answer.at(-1).callId, 'call-1')
+  assert.equal(host.calls.answer.at(-1).agentId, 's1')
+  assert.deepEqual(host.calls.answer.at(-1).answer, { answers: [{ id: 'q1', selected: ['B'] }] })
 
   const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.length, 0, 'the answered question left the pending list')
