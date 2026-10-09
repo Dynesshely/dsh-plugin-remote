@@ -10,6 +10,13 @@ export const state = reactive({
   bind: '',
   workspaces: [],
   sessions: [],
+  /** Pinned/archived Session ids, mirrored from the same workspace controller the desktop reads. */
+  pinnedSessionIds: [],
+  archivedSessionIds: [],
+  /** True once the workspace controller mirror is live, so the menu knows management is available. */
+  managed: false,
+  /** Agent presets ("模式") the create dialog offers. */
+  presets: [],
   selected: undefined,
   pending: { questions: [], approvals: [] },
   events: [],
@@ -51,21 +58,38 @@ export const groupedSessions = computed(() => {
     byWorkspace.set(workspace.id, { ...workspace, sessions: [] })
   }
   const orphans = { id: '__none__', title: '未归档', path: '', sessions: [] }
+  // Archived Sessions stay reachable but out of the way, like the desktop's archived section.
+  const archived = []
   for (const session of state.sessions) {
+    if (state.archivedSessionIds.includes(session.id)) {
+      archived.push(session)
+      continue
+    }
     const group = byWorkspace.get(session.workspaceId)
     if (group === undefined) orphans.sessions.push(session)
     else group.sessions.push(session)
   }
   const groups = [...byWorkspace.values()].filter((group) => group.sessions.length > 0)
-  for (const group of groups) {
-    group.sessions.sort((left, right) => right.updatedAt - left.updatedAt)
-  }
+  // Pinned first, then most recently used — the ordering the desktop list uses.
+  const order = (left, right) => (pinnedRank(right) - pinnedRank(left)) || (right.updatedAt - left.updatedAt)
+  for (const group of groups) group.sessions.sort(order)
   if (orphans.sessions.length > 0) {
-    orphans.sessions.sort((left, right) => right.updatedAt - left.updatedAt)
+    orphans.sessions.sort(order)
     groups.push(orphans)
   }
-  return groups
+  archived.sort(order)
+  return { groups, archived }
 })
+
+/** @returns 1 for a pinned Session, 0 otherwise, so a plain sort floats pins to the top. */
+function pinnedRank (session) {
+  return state.pinnedSessionIds.includes(session.id) ? 1 : 0
+}
+
+/** @returns whether a Session is pinned. */
+export function isPinned (sessionId) {
+  return state.pinnedSessionIds.includes(String(sessionId))
+}
 
 /**
  * Render items for the transcript: messages, paired tool calls, and turn notices.
@@ -309,6 +333,7 @@ export async function loadState () {
     state.sessions = payload.sessions ?? []
     state.workspaces = payload.workspaces ?? []
     state.pending = payload.pending ?? { questions: [], approvals: [] }
+    installManagement(payload)
     state.unauthorized = false
     state.bootError = ''
     state.booted = true
@@ -382,9 +407,12 @@ export async function selectSession (sessionId) {
   source = openStream(sessionId, {
     onFrame: handleFrame,
     onPending: (pending) => { state.pending = pending },
-    onSessions: (sessions) => {
+    onSessions: (payload) => {
+      // The payload also carries the pinned/archived sets, which is how a desktop-side pin shows up here.
+      const sessions = Array.isArray(payload) ? payload : (payload?.sessions ?? [])
       const known = new Map(state.sessions.map((session) => [session.id, session]))
       state.sessions = sessions.map((session) => ({ ...session, workspaceId: known.get(session.id)?.workspaceId }))
+      if (Array.isArray(payload) === false) installManagement(payload)
       refreshSoon()
     },
     onError: (message) => { state.streamError = message },
@@ -638,5 +666,104 @@ export async function stageImage (file) {
     data: dataUrl.slice(dataUrl.indexOf(',') + 1),
     name: file.name === '' ? undefined : file.name,
     preview: dataUrl,
+  }
+}
+
+/* ---------------------------------------------------------------- session management */
+
+/**
+ * Install the pinned/archived sets a state or `sessions` payload carries.
+ * @param payload - a `/api/state` reply or a `sessions` SSE payload.
+ */
+function installManagement (payload) {
+  if (payload === null || payload === undefined) return
+  if (Array.isArray(payload.pinnedSessionIds)) state.pinnedSessionIds = payload.pinnedSessionIds.map(String)
+  if (Array.isArray(payload.archivedSessionIds)) state.archivedSessionIds = payload.archivedSessionIds.map(String)
+  if (typeof payload.managed === 'boolean') state.managed = payload.managed
+}
+
+/**
+ * Run one session-management action against the Host.
+ * @param path - route under `/api/session/`.
+ * @param body - its JSON body.
+ * @returns the Host reply, or undefined after surfacing the error.
+ */
+async function manage (path, body) {
+  state.actionError = ''
+  try {
+    const payload = await api(`/api/session/${path}`, { method: 'POST', body })
+    installManagement(payload)
+    // Re-read the list so titles, ordering, and pinned/archived rows all agree with the Host.
+    await loadState()
+    return payload
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+    return undefined
+  }
+}
+
+/**
+ * Pin or unpin one Session.
+ * @param sessionId - the Session.
+ * @param pinned - false to unpin.
+ */
+export async function setPinned (sessionId, pinned) {
+  return manage('pin', { sessionId, pinned })
+}
+
+/**
+ * Rename one Session.
+ * @param sessionId - the Session.
+ * @param title - the new title.
+ */
+export async function renameSession (sessionId, title) {
+  return manage('rename', { sessionId, title })
+}
+
+/**
+ * Fork one Session from its last ended turn, then open the child.
+ * @param sessionId - the source Session.
+ */
+export async function forkSession (sessionId) {
+  const payload = await manage('fork', { sessionId })
+  if (typeof payload?.sessionId === 'string' && payload.sessionId !== '') await selectSession(payload.sessionId)
+  return payload
+}
+
+/**
+ * Archive or unarchive one Session.
+ * @param sessionId - the Session.
+ * @param archived - false to unarchive.
+ * @param stopActivity - also stop work that is still running (never implied).
+ */
+export async function setArchived (sessionId, archived, stopActivity = false) {
+  return manage('archive', { sessionId, archived, stopActivity })
+}
+/**
+ * Load the agent presets ("模式") a new Session can be created with.
+ */
+export async function loadPresets () {
+  try {
+    const payload = await api('/api/presets')
+    state.presets = Array.isArray(payload.presets) ? payload.presets : []
+  } catch {
+    state.presets = []
+  }
+}
+
+/**
+ * Create a Session in one workspace, optionally with an agent preset.
+ * @param options - `{ workspaceId?, cwd?, agentPreset? }`.
+ * @returns the new Session id, or undefined after surfacing the error.
+ */
+export async function createSession (options) {
+  state.actionError = ''
+  try {
+    const payload = await api('/api/session/create', { method: 'POST', body: options })
+    await loadState()
+    return typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+    return undefined
   }
 }
