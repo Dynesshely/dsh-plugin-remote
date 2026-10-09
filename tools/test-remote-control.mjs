@@ -26,7 +26,7 @@ function createHost () {
   const handlers = new Map()
   const effects = []
   const logs = []
-  const calls = { list: 0, prompt: [], cancel: [], follow: [], page: [], answer: [], saveImages: [], selectModel: [], setPreset: [], attachments: [] }
+  const calls = { list: 0, prompt: [], cancel: [], follow: [], page: [], answer: [], saveImages: [], selectModel: [], setPreset: [], attachments: [], rename: [], fork: [], archive: [], create: [] }
   const sessionObject = { id: 's1', requestHeader: () => ({ config: { provider: 'pi', model: 'test-model' } }) }
 
   /**
@@ -59,6 +59,44 @@ function createHost () {
   /** Question call ids the fake Host service considers already continued (answerable in place). */
   const continuedQuestions = new Set()
   makeAgent('s1')
+
+  // Workspace controller stand-in: the same service the desktop client reads, plus its push stream.
+  let pinnedIds = []
+  let archivedIds = []
+  const workspaceFrames = []
+  let wakeWorkspace
+  const workspaceController = {
+    pinSession: async ({ sessionId }) => {
+      pinnedIds = [...new Set([...pinnedIds, sessionId])]
+      return { pinnedSessionIds: pinnedIds }
+    },
+    unpinSession: async ({ sessionId }) => {
+      pinnedIds = pinnedIds.filter((id) => id !== sessionId)
+      return { pinnedSessionIds: pinnedIds }
+    },
+    archiveSession: async ({ sessionId, stopActivity }) => {
+      calls.archive.push({ sessionId, stopActivity })
+      archivedIds = [...new Set([...archivedIds, sessionId])]
+      return { archivedSessionIds: archivedIds }
+    },
+    unarchiveSession: async ({ sessionId }) => {
+      archivedIds = archivedIds.filter((id) => id !== sessionId)
+      return { archivedSessionIds: archivedIds }
+    },
+    follow: async function * (signal) {
+      while (signal?.aborted !== true) {
+        while (workspaceFrames.length === 0) {
+          await new Promise((resolve) => { wakeWorkspace = resolve })
+          if (signal?.aborted === true) return
+        }
+        const frame = workspaceFrames.shift()
+        if (frame === undefined) continue
+        if (frame.type === 'pinned') pinnedIds = [...frame.pinnedSessionIds]
+        if (frame.type === 'archived') archivedIds = [...frame.archivedSessionIds]
+        yield frame
+      }
+    },
+  }
 
   // Stands in for the desktop answerer: registered before the plugin (so a listener that does not
   // prepend ends up behind it) and returning the user's answer WITHOUT calling `next()`, which vetoes
@@ -113,6 +151,15 @@ function createHost () {
     },
     get: (key) => {
       if (key === 'agents') return { list: () => liveAgents, get: (id) => liveAgents.find((agent) => agent.id === id) }
+      if (key === 'workspaceController') return workspaceController
+      if (key === 'agentPresets') {
+        return {
+          list: async () => [
+            { id: 'standard', name: '标准模式', description: '处理代码、文件和资料', order: 0 },
+            { id: 'ptc', name: 'PTC 模式', description: '批量调用工具', order: 10 },
+          ],
+        }
+      }
       if (key === 'userQuestions') {
         return {
           // The real service only accepts a question that already timed out into `continued(agent)`;
@@ -156,6 +203,9 @@ function createHost () {
       }),
       selectModel: async (request) => { calls.selectModel.push(request); return { selected: { provider: request.provider, model: request.model } } },
       resolveAgent: async () => ({ agent: { id: 's1' } }),
+      rename: async (request) => { calls.rename.push(request); return { title: request.title, seq: 7 } },
+      create: async (request) => { calls.create.push(request); return { sessionId: 's-new', agentPreset: request.agentPreset } },
+      fork: async (request) => { calls.fork.push(request); return { sessionId: 's-fork' } },
       page: async (request) => {
         calls.page.push(request)
         return {
@@ -182,6 +232,9 @@ function createHost () {
     liveAgents,
     agentScopes,
     makeAgent,
+    workspaceController,
+    /** Push one workspace frame, as a desktop-side pin or archive would. */
+    pushWorkspaceFrame: (frame) => { workspaceFrames.push(frame); wakeWorkspace?.(); wakeWorkspace = undefined },
     DESKTOP_ANSWER,
     /** Mark a question as already continued, so the Host service accepts a remote answer for it. */
     markContinued: (callId) => continuedQuestions.add(String(callId)),
@@ -241,6 +294,11 @@ async function check (name, fn) {
 console.log('Remote Control integration')
 
 const host = createHost()
+/** @returns a promise that settles after the given milliseconds. */
+function pause (ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms) })
+}
+
 const base = await boot(host)
 const cookie = { cookie: `dsh_rc=${TOKEN}` }
 const distIndex = new URL('../ui/dist/index.html', import.meta.url)
@@ -779,19 +837,149 @@ await check('a continued question is answered through the Host service', async (
   assert.equal(after.pending.questions.some((question) => question.callId === 'call-svc'), false)
 })
 
-await check('an approval is surfaced but keeps the desktop decision', async () => {
+await check('an approval is surfaced and retires when the desktop decides', async () => {
   const listener = host.agentListener('s1', 'approval/request')
   assert.equal(typeof listener, 'function', 'the live agent is observed for approvals too')
   let passedThrough = false
-  const outcome = await listener({ toolName: 'bash', reason: 'rm -rf build' }, () => {
+  let decide
+  // The desktop panel answers whenever the user gets to it, so the waterfall stays pending here.
+  const pending = listener({ toolName: 'bash', reason: 'rm -rf build' }, () => {
     passedThrough = true
-    return Promise.resolve('allowed-once')
+    return new Promise((resolve) => { decide = resolve })
   })
-  assert.equal(outcome, 'allowed-once')
-  assert.equal(passedThrough, true)
+  await pause(30)
+  const waiting = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(waiting.pending.approvals.length, 1, 'a pending approval is surfaced')
+  assert.equal(waiting.pending.approvals[0].toolName, 'bash')
+  assert.equal(passedThrough, true, 'the desktop chain still owns the decision')
+
+  decide('allowed-once')
+  assert.equal(await pending, 'allowed-once')
+  await pause(30)
+  const settled = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(settled.pending.approvals.length, 0, 'the card goes away as soon as it is decided')
+})
+
+await check('an approval also retires when its tool starts running', async () => {
+  const listener = host.agentListener('s1', 'approval/request')
+  // Never settles: the decision came from somewhere this plugin cannot see.
+  void listener({ toolName: 'write', reason: 'outside the workspace' }, () => new Promise(() => {}))
+  await pause(20)
+  const before = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(before.pending.approvals.some((approval) => approval.toolName === 'write'), true)
+
+  // A tool starting to run is proof the approval was granted.
+  host.emit('session/event', { id: 's1' }, {
+    type: 'tool/call',
+    seq: 90,
+    data: { callId: 'call-approved', name: 'write', arguments: '{}' },
+  })
+  await pause(20)
+  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.equal(
+    after.pending.approvals.some((approval) => approval.toolName === 'write'),
+    false,
+    'a tool that started retires its card',
+  )
+})
+
+await check('session management reaches the same Remotes the desktop uses', async () => {
+  const call = async (path, body) => {
+    const response = await fetch(`${base}/api/session/${path}`, {
+      method: 'POST',
+      headers: { ...cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json()
+    assert.equal(response.status, 200, JSON.stringify(payload))
+    return payload
+  }
+
+  // pin / unpin: the reply carries the complete set, which is what both ends mirror.
+  assert.deepEqual((await call('pin', { sessionId: 's2' })).pinnedSessionIds, ['s2'])
+  let state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.deepEqual(state.pinnedSessionIds, ['s2'], 'the state payload carries the pins')
+  assert.equal(state.managed, true, 'the workspace mirror reports itself live')
+  assert.deepEqual((await call('pin', { sessionId: 's2', pinned: false })).pinnedSessionIds, [])
+
+  // rename / fork go straight through the session controller.
+  assert.equal((await call('rename', { sessionId: 's1', title: '  Alpha 重命名  ' })).title, 'Alpha 重命名')
+  assert.deepEqual(host.calls.rename.at(-1), { sessionId: 's1', title: 'Alpha 重命名' })
+  assert.equal((await call('fork', { sessionId: 's1' })).sessionId, 's-fork')
+  assert.deepEqual(host.calls.fork.at(-1), { sessionId: 's1' })
+
+  // Validation refuses what the Host would refuse anyway.
+  const empty = await fetch(`${base}/api/session/rename`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 's1', title: '   ' }),
+  })
+  assert.equal(empty.status, 400)
+
+  // archive unpins (the desktop client's own rule) and defaults to not stopping work.
+  await call('pin', { sessionId: 's3' })
+  const archived = await call('archive', { sessionId: 's3' })
+  assert.deepEqual(archived.archivedSessionIds, ['s3'])
+  assert.deepEqual(archived.pinnedSessionIds, [], 'archiving unpins the Session')
+  assert.deepEqual(host.calls.archive.at(-1), { sessionId: 's3', stopActivity: false })
+  state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.deepEqual(state.archivedSessionIds, ['s3'])
+  assert.deepEqual((await call('archive', { sessionId: 's3', archived: false })).archivedSessionIds, [])
+})
+
+await check('a pin made on the desktop arrives through the follow stream', async () => {
+  // The bi-directional half: the desktop pins, this plugin mirrors the pushed set, the page re-reads it.
+  host.pushWorkspaceFrame({ type: 'pinned', pinnedSessionIds: ['s1', 's2'] })
+  await new Promise((resolve) => { setTimeout(resolve, 50) })
   const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
-  assert.equal(state.pending.approvals.length, 1)
-  assert.equal(state.pending.approvals[0].toolName, 'bash')
+  assert.deepEqual(state.pinnedSessionIds, ['s1', 's2'], 'the desktop-side pin is mirrored')
+
+  host.pushWorkspaceFrame({ type: 'archived', archivedSessionIds: ['s2'] })
+  await new Promise((resolve) => { setTimeout(resolve, 50) })
+  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  assert.deepEqual(after.archivedSessionIds, ['s2'], 'and so is an archive made there')
+})
+
+await check('host routes reload from host/hot.js without a DSH restart', async () => {
+  const response = await fetch(`${base}/api/__reload`, { method: 'POST', headers: cookie })
+  const payload = await response.json()
+  assert.equal(response.status, 200, JSON.stringify(payload))
+  assert.equal(payload.ok, true)
+  assert.equal(typeof payload.mtimeMs, 'number')
+})
+
+await check('a workspace can start a Session with a chosen mode', async () => {
+  // The desktop's "模式" list is the agent-preset registry.
+  const presets = await (await fetch(`${base}/api/presets`, { headers: cookie })).json()
+  assert.deepEqual(presets.presets.map((preset) => preset.id), ['standard', 'ptc'], 'ordered by the registry order')
+  assert.equal(presets.presets[0].name, '标准模式', 'the page shows the picker wording, not the raw id')
+  assert.ok(String(presets.presets[0].description).startsWith('处理代码、文件和资料'), 'and its description')
+
+  const response = await fetch(`${base}/api/session/create`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ workspaceId: 'w1', agentPreset: 'ptc' }),
+  })
+  const payload = await response.json()
+  assert.equal(response.status, 200, JSON.stringify(payload))
+  assert.equal(payload.sessionId, 's-new')
+  assert.equal(payload.agentPreset, 'ptc')
+  assert.deepEqual(host.calls.create.at(-1), { workspaceId: 'w1', agentPreset: 'ptc' })
+
+  // cwd is accepted instead of a workspace id, which is what an ungrouped row needs.
+  await fetch(`${base}/api/session/create`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ cwd: 'C:\\work\\alpha', agentPreset: 'standard' }),
+  })
+  assert.deepEqual(host.calls.create.at(-1), { cwd: 'C:\\work\\alpha', agentPreset: 'standard' })
+
+  const invalid = await fetch(`${base}/api/session/create`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ agentPreset: 'standard' }),
+  })
+  assert.equal(invalid.status, 400, 'a create request needs somewhere to live')
 })
 
 await check('repeated bad logins are rate limited', async () => {

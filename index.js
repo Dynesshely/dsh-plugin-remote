@@ -222,6 +222,71 @@ function basename (path) {
   return parts.length === 0 ? path : parts[parts.length - 1]
 }
 
+/**
+ * Live workspace state mirrored from `workspaceController.follow()`.
+ *
+ * This is the same single source the desktop client reads, and every pin/archive change arrives as a
+ * frame carrying the complete set — which is what keeps both ends in sync without copying state.
+ */
+const workspaceState = { items: [], pinnedSessionIds: [], archivedSessionIds: [], at: 0, error: undefined }
+
+/** @returns the wire shape the page consumes for one workspace tree. */
+function normalizeWorkspaces (items) {
+  return (Array.isArray(items) ? items : []).map((workspace) => ({
+    id: String(workspace?.workspaceId ?? workspace?.id ?? ''),
+    title: String(workspace?.title ?? ''),
+    path: String(workspace?.path ?? ''),
+    sessionIds: (Array.isArray(workspace?.sessionIds) ? workspace.sessionIds : []).map(String),
+  }))
+}
+
+/**
+ * Install one `WorkspaceFollowFrame`: a baseline replaces everything, an increment patches it.
+ * @param frame - a frame from the follow stream.
+ * @returns whether the frame was understood.
+ */
+function applyWorkspaceFrame (frame) {
+  const type = frame?.type
+  if (type === 'baseline') {
+    workspaceState.items = normalizeWorkspaces(frame.value?.items)
+    workspaceState.pinnedSessionIds = (frame.value?.pinnedSessionIds ?? []).map(String)
+    workspaceState.archivedSessionIds = (frame.value?.archivedSessionIds ?? []).map(String)
+  } else if (type === 'upsert') {
+    const next = normalizeWorkspaces([frame.workspace])[0]
+    if (next === undefined) return false
+    workspaceState.items = [...workspaceState.items.filter((workspace) => workspace.id !== next.id), next]
+  } else if (type === 'remove') {
+    workspaceState.items = workspaceState.items.filter((workspace) => workspace.id !== String(frame.workspaceId))
+  } else if (type === 'order') {
+    const rank = new Map((frame.workspaceIds ?? []).map((id, index) => [String(id), index]))
+    workspaceState.items = [...workspaceState.items].sort((left, right) => (rank.get(left.id) ?? 0) - (rank.get(right.id) ?? 0))
+  } else if (type === 'pinned') {
+    workspaceState.pinnedSessionIds = (frame.pinnedSessionIds ?? []).map(String)
+  } else if (type === 'archived') {
+    workspaceState.archivedSessionIds = (frame.archivedSessionIds ?? []).map(String)
+  } else {
+    return false
+  }
+  workspaceState.at = Date.now()
+  workspaceState.error = undefined
+  return true
+}
+
+/** @returns the workspace tree for the page, preferring the live controller mirror. */
+async function workspaceTree (ctx) {
+  if (workspaceState.items.length > 0) return workspaceState.items
+  return workspacesOf(ctx)
+}
+
+/** @returns the management state every page needs: pinned, archived, and whether it is live. */
+function managementState () {
+  return {
+    pinnedSessionIds: workspaceState.pinnedSessionIds,
+    archivedSessionIds: workspaceState.archivedSessionIds,
+    managed: workspaceState.at > 0,
+  }
+}
+
 /** @returns the URLs a client could use, so the README and the page can show them. */
 function candidateUrls (bind, port) {
   const urls = [`http://127.0.0.1:${String(port)}`]
@@ -255,7 +320,11 @@ function readAsset (pathname) {
   try {
     const info = statSync(target)
     if (!info.isFile()) return undefined
-    return { body: readFileSync(target), type: MIME[extname(target).toLowerCase()] ?? 'application/octet-stream', immutable: /^assets[/\\]/u.test(relative) }
+    return {
+      body: readFileSync(target),
+      type: MIME[extname(target).toLowerCase()] ?? 'application/octet-stream',
+      immutable: /^assets[/\\]/u.test(relative),
+    }
   } catch {
     return undefined
   }
@@ -355,6 +424,8 @@ export function apply (ctx, config) {
   const questions = new Map()
   /** Pending approvals, keyed by a synthetic key. */
   const approvals = new Map()
+  /** A record this old has certainly been decided; it is dropped rather than shown forever. */
+  const APPROVAL_TTL_MS = 30 * 60 * 1000
   /** Failed-login counters keyed by peer address. */
   const attempts = new Map()
 
@@ -398,7 +469,7 @@ export function apply (ctx, config) {
       // through the waterfall this plugin is racing (a question the desktop is still waiting on).
       answerable: record.answerable === true || remoteAnswers.has(record.callId),
     })),
-    approvals: [...approvals.values()],
+    approvals: [...approvals.values()].filter((record) => Date.now() - record.at < APPROVAL_TTL_MS),
   })
 
   /**
@@ -442,6 +513,44 @@ export function apply (ctx, config) {
     record.count += 1
     return record.count <= LOGIN_LIMIT
   }
+
+  // ---------------------------------------------------------------- hot routes (no DSH restart)
+
+  const HOT_URL = new URL('./host/hot.js', import.meta.url)
+  let hot = { module: undefined, mtimeMs: 0, loadedAt: 0, error: undefined }
+
+  /**
+   * Import the routable half of this plugin, re-importing whenever that file changes.
+   *
+   * The Loader caches plugin modules by file URL, which is why editing the Host half used to require a
+   * DSH restart: a bundle toggle only re-applies the cached generation. Route code living in
+   * `host/hot.js` is imported here with an mtime query instead, so an edit takes effect on the very
+   * next request. Edits to *this* file still need a restart.
+   * @param force - re-import even when the mtime is unchanged.
+   * @returns the module, or undefined when it cannot be loaded.
+   */
+  async function loadHot (force = false) {
+    try {
+      const info = statSync(HOT_URL)
+      if (!force && hot.module !== undefined && info.mtimeMs === hot.mtimeMs) return hot.module
+      const url = new URL(HOT_URL.href)
+      url.searchParams.set('v', String(info.mtimeMs))
+      const module = await import(url.href)
+      hot = { module, mtimeMs: info.mtimeMs, loadedAt: Date.now(), error: undefined }
+      ctx.logger.info(`[remote-control] hot routes loaded (${new Date(info.mtimeMs).toISOString()})`)
+      return module
+    } catch (error) {
+      // A broken edit must not take the page down: keep serving the last generation that parsed, and
+      // report the failure through `/api/__reload` so the mistake is visible instead of silent.
+      hot.error = String(error?.message ?? error)
+      hot.mtimeMs = 0
+      ctx.logger.warn(`[remote-control] hot routes failed: ${hot.error}`)
+      return hot.module
+    }
+  }
+
+  /** @returns the session list plus the management sets every page mirrors. */
+  const sessionsPayload = async () => ({ sessions: await sessionsOf(ctx), ...managementState() })
 
   /** Route one request. */
   const handle = async (request, response) => {
@@ -507,6 +616,50 @@ export function apply (ctx, config) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/__reload') {
+      // Explicit trigger for flows that never issue a normal request (an SSE-only page, a script).
+      const module = await loadHot(true)
+      json(module === undefined ? 500 : 200, {
+        ok: module === undefined ? false : true,
+        mtimeMs: hot.mtimeMs,
+        loadedAt: hot.loadedAt,
+        error: hot.error,
+      })
+      return
+    }
+    // Hot routes come first, so a feature added to `host/hot.js` works without restarting DSH.
+    const hotRoutes = await loadHot()
+    if (typeof hotRoutes?.handle === 'function') {
+      try {
+        const handled = await hotRoutes.handle({
+          ctx,
+          request,
+          url,
+          json,
+          readJson,
+          broadcast,
+          pendingPayload,
+          sessionsPayload,
+          workspaceTree,
+          managementState,
+          sessionsOf,
+          agentOf,
+          setPinned: (ids) => {
+            workspaceState.pinnedSessionIds = (Array.isArray(ids) ? ids : []).map(String)
+            workspaceState.at = Date.now()
+          },
+          setArchived: (ids) => {
+            workspaceState.archivedSessionIds = (Array.isArray(ids) ? ids : []).map(String)
+            workspaceState.at = Date.now()
+          },
+        })
+        if (handled === true) return
+      } catch (error) {
+        json(500, { error: String(error?.message ?? error) })
+        return
+      }
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/diagnose') {
       // Why a question cannot be answered remotely is nearly always an attachment problem, so the
       // capture counters and the live agent ids are exposed instead of guessing from the UI.
@@ -527,7 +680,7 @@ export function apply (ctx, config) {
 
     if (request.method === 'GET' && url.pathname === '/api/state') {
       try {
-        const [sessions, workspaces] = await Promise.all([sessionsOf(ctx), workspacesOf(ctx)])
+        const [sessions, workspaces] = await Promise.all([sessionsOf(ctx), workspaceTree(ctx)])
         // A Session belongs to the workspace that lists it; cwd is the fallback for older rows.
         const byMembership = new Map()
         for (const workspace of workspaces) {
@@ -547,6 +700,7 @@ export function apply (ctx, config) {
         json(200, {
           sessions,
           workspaces,
+          ...managementState(),
           pending: pendingPayload(),
           urls: candidateUrls(settings.bind, boundPort),
           bind: settings.bind,
@@ -1043,6 +1197,35 @@ export function apply (ctx, config) {
         at: Date.now(),
       })
       broadcast('pending', pendingPayload())
+      return key
+    }
+
+    /**
+     * Subscribe to one live agent, exactly once.
+     * @param agent - a live agent handle.
+     */
+    /**
+     * Retire one approval record.
+     *
+     * The remote side only reports approvals, so nothing here answers them — which is exactly why the
+     * card has to come down when the decision arrives from whoever does own it (the desktop). Without
+     * this the card stayed until the Session ended, no matter how often the page was reloaded.
+     * @param key - the record's key.
+     */
+    const forgetApproval = (key) => {
+      if (key === undefined || key === '' || !approvals.delete(key)) return
+      broadcast('pending', pendingPayload())
+    }
+
+    /**
+     * Retire every approval a Session recorded for a tool that has started running.
+     * @param sessionId - the Session.
+     * @param toolName - the tool call that began.
+     */
+    const forgetApprovalsFor = (sessionId, toolName) => {
+      for (const [key, record] of [...approvals]) {
+        if (record.sessionId === sessionId && record.toolName === toolName) forgetApproval(key)
+      }
     }
 
     /**
@@ -1065,8 +1248,19 @@ export function apply (ctx, config) {
           }, { prepend: true }),
           // Observed only: the decision chain stays with the desktop answerer.
           agent.ctx.on('approval/request', (request, next) => {
-            recordApproval(agent, request)
-            return next()
+            // The decision chain stays with the desktop answerer, but its result is what retires the
+            // card here — answering on the desktop must not leave the remote card behind.
+            const key = recordApproval(agent, request)
+            return next().then(
+              (decision) => {
+                forgetApproval(key)
+                return decision
+              },
+              (error) => {
+                forgetApproval(key)
+                throw error
+              },
+            )
           }, { prepend: true }),
         ]
         agentDisposers.set(id, disposers)
@@ -1155,8 +1349,17 @@ export function apply (ctx, config) {
     }, { prepend: true })
     // Observed only, like the per-agent registration.
     const offRootApprovals = ctx.on('approval/request', (request, next) => {
-      recordApproval(request?.agent, request)
-      return next()
+      const key = recordApproval(request?.agent, request)
+      return next().then(
+        (decision) => {
+          forgetApproval(key)
+          return decision
+        },
+        (error) => {
+          forgetApproval(key)
+          throw error
+        },
+      )
     }, { prepend: true })
     /**
      * The primary capture path: the Session log's own append feed.
@@ -1169,7 +1372,11 @@ export function apply (ctx, config) {
     const offSessionEvents = ctx.on('session/event', (session, event) => {
       const type = event?.type
       if (type === 'tool/call') {
-        if (!QUESTION_TOOLS.has(String(event.data?.name ?? ''))) return
+        // The tool is running, so its approval was granted: retire any card for it. This holds even
+        // when the decision came from another client and the waterfall never reported a result.
+        const started = String(event.data?.name ?? '')
+        if (started !== '') forgetApprovalsFor(String(session?.id ?? ''), started)
+        if (!QUESTION_TOOLS.has(started)) return
         const callId = String(event.data?.callId ?? '')
         if (callId === '') return
         let args = event.data?.arguments
@@ -1189,12 +1396,39 @@ export function apply (ctx, config) {
         if (callId !== '' && questions.delete(callId)) broadcast('pending', pendingPayload())
       }
     })
+    /** @returns the session list plus the management sets every page mirrors. */
     const offStatus = ctx.on('api-session/status', () => {
-      void sessionsOf(ctx).then((sessions) => {
-        broadcast('sessions', { sessions })
+      void sessionsPayload().then((payload) => {
+        broadcast('sessions', payload)
       }, () => {})
     })
+    /**
+     * Mirror the workspace controller: its follow stream is how a pin or archive made on the desktop
+     * reaches this page, and vice versa, because both ends read the same sets from the same service.
+     */
+    const workspaceController = ctx.get('workspaceController')
+    let workspaceStopped = false
+    if (typeof workspaceController?.follow === 'function') {
+      void (async () => {
+        while (!workspaceStopped) {
+          const controller = new AbortController()
+          try {
+            for await (const frame of workspaceController.follow(controller.signal)) {
+              if (workspaceStopped) return
+              if (applyWorkspaceFrame(frame)) void sessionsPayload().then((payload) => broadcast('sessions', payload), () => {})
+            }
+          } catch (error) {
+            workspaceState.error = String(error?.message ?? error)
+          }
+          if (workspaceStopped) return
+          await new Promise((resolve) => { setTimeout(resolve, 2000) })
+        }
+      })()
+    } else {
+      workspaceState.error = 'workspaceController is unavailable'
+    }
     return () => {
+      workspaceStopped = true
       offCreated()
       offDisposed()
       offRootQuestions()
