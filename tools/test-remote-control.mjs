@@ -729,6 +729,36 @@ await check('a question the desktop is still waiting on is answerable from the r
   host.replaceBridge('user-questions/request', () => Promise.resolve(host.DESKTOP_ANSWER))
 })
 
+await check('a waiting waterfall that carries no call id is matched to the log record', async () => {
+  // The live shape: observers receive `{questions, agent, signal}` with no `wait`, so the call id can
+  // only come from the Session log — the record is matched by Session plus question signature.
+  host.emit('session/event', { id: 's1' }, {
+    type: 'tool/call',
+    seq: 70,
+    data: { callId: 'call-sig', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'sig', question: '签名匹配', options: [{ label: 'A' }] }] }) },
+  })
+  host.replaceBridge('user-questions/request', () => new Promise(() => {}))
+  const waiting = host.emitWaterfall('user-questions/request', {
+    agent: host.liveAgents[0],
+    questions: [{ id: 'sig', question: '签名匹配', options: [{ label: 'A' }] }],
+  })
+
+  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const record = state.pending.questions.find((question) => question.callId === 'call-sig')
+  assert.notEqual(record, undefined)
+  assert.equal(record.answerable, true, 'the waiting waterfall bound itself to the logged call id')
+
+  const answered = await fetch(`${base}/api/answer`, {
+    method: 'POST',
+    headers: { ...cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ callId: 'call-sig', answers: [{ id: 'sig', selected: ['A'] }] }),
+  })
+  const body = await answered.text()
+  assert.equal(JSON.parse(body).ok, true, body)
+  assert.deepEqual(await waiting, { answers: [{ id: 'sig', selected: ['A'] }] }, 'the answer travelled back through the waterfall')
+  host.replaceBridge('user-questions/request', () => Promise.resolve(host.DESKTOP_ANSWER))
+})
+
 await check('a continued question is answered through the Host service', async () => {
   host.emit('session/event', { id: 's1' }, {
     type: 'tool/call',

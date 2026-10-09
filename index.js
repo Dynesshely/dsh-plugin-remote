@@ -980,11 +980,29 @@ export function apply (ctx, config) {
         callId: String(callId),
         sessionId: String(sessionId ?? owner?.id ?? ''),
         questions: list,
+        // What an observer receives of the waterfall carries no `wait`, so this signature is how a
+        // waiting waterfall is matched back to the call id the Session log already told us about.
+        signature: list.map((question) => question.id).join('|'),
         at: Date.now(),
         agent: owner,
         answerable: owner !== undefined,
       })
       broadcast('pending', pendingPayload())
+    }
+
+    /**
+     * @param sessionId - owning Session.
+     * @param request - the waterfall payload, which has no call id of its own.
+     * @returns the newest log-captured record this waiting request belongs to, if any.
+     */
+    const matchWaitingRecord = (sessionId, request) => {
+      const signature = (Array.isArray(request?.questions) ? request.questions : [])
+        .map((question) => String(question?.id ?? ''))
+        .join('|')
+      if (signature === '') return undefined
+      return [...questions.values()].reverse().find((record) => record.sessionId === sessionId
+        && record.signature === signature
+        && !remoteAnswers.has(record.callId))
     }
 
     /**
@@ -1094,31 +1112,46 @@ export function apply (ctx, config) {
       }
       if (changed) broadcast('pending', pendingPayload())
     })
+    /**
+     * Race the downstream answerer (the desktop panel) against the remote page for one call id.
+     *
+     * `next()` is always invoked, so the desktop panel still appears and stays authoritative whenever
+     * it answers first; the remote channel is simply retired in that case.
+     * @param key - the tool call id the answer is routed by.
+     * @param next - the remaining waterfall chain.
+     * @returns whichever side answers first.
+     */
+    const raceWithRemote = (key, next) => new Promise((resolve, reject) => {
+      let settled = false
+      const settle = (value) => {
+        if (settled) return
+        settled = true
+        remoteAnswers.delete(key)
+        resolve(value)
+      }
+      remoteAnswers.set(key, (answers) => {
+        settle({ answers })
+      })
+      broadcast('pending', pendingPayload())
+      next().then(settle, (error) => {
+        remoteAnswers.delete(key)
+        settled = true
+        reject(error)
+      })
+    })
+
     const offRootQuestions = ctx.on('user-questions/request', (request, next) => {
       capture.rootQuestions += 1
       recordQuestion(request?.agent, request)
-      const callId = request?.wait?.callId
-      if (callId === undefined) return next()
-      // Race the downstream answerer (the desktop panel) against the remote page. `next()` is still
-      // called, so the desktop panel appears and stays authoritative whenever it answers first.
-      return new Promise((resolve, reject) => {
-        const key = String(callId)
-        let settled = false
-        const settle = (value) => {
-          if (settled) return
-          settled = true
-          remoteAnswers.delete(key)
-          resolve(value)
-        }
-        remoteAnswers.set(key, (answers) => {
-          settle({ answers })
-        })
-        next().then(settle, (error) => {
-          remoteAnswers.delete(key)
-          settled = true
-          reject(error)
-        })
-      })
+      // A request an observer receives carries no `wait`, so a waiting waterfall is matched to the
+      // record the Session log captured, by Session plus question signature; one that does carry a
+      // call id is keyed directly.
+      const explicit = request?.wait?.callId === undefined ? undefined : String(request.wait.callId)
+      const record = explicit === undefined
+        ? matchWaitingRecord(String(request?.agent?.id ?? ''), request)
+        : questions.get(explicit)
+      if (record === undefined) return next()
+      return raceWithRemote(String(record.callId), next)
     }, { prepend: true })
     // Observed only, like the per-agent registration.
     const offRootApprovals = ctx.on('approval/request', (request, next) => {

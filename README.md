@@ -47,8 +47,8 @@
     3. **实测该瀑布载荷里没有 `wait`**：`rootQuestions` 会 +1、`missingWait` 也会 +1（收到事件但拿不到 `callId`）——这正是改用日志路径的直接原因。`/api/diagnose` 的 `lastRequest` 会记录最近一次瀑布载荷的 keys 便于复核。
     另外这类事件按 Agent 作用域派发（`dsh-scope` 的 invariant 用 `args[0].agent` 取路由键），而桌面启动会先恢复你正在看的会话，**它的 agent 早于 profile bundle 加载完成就已存在**，`agent/created` 不会再触发——所以加载时还要用 `ctx.get('agents').list()` 枚举已存在的 agent。`GET /api/diagnose` 可核对 `attached` / `liveAgents` / `sessionCalls` / `rootQuestions` / `missingWait`。
   - 交互与桌面一致：单选点一下即选中并自动跳到下一个问题，多选是切换；Enter 提交；未答完时提交按钮禁用并把焦点跳回缺答的那一题。
-  - **作答路径（与捕获同样关键）**：`ctx.userQuestions.answer()` 内部要求该提问已在 `continued(agent)` 里（即**已经超时转为"待续答"的 timed 提问**），否则直接返回 `false`——而桌面正在**同步等待**的提问（DSH 当前的 `timed: false` 情形）不在其中，远程端用那个 API 根本答不了。所以插件的做法是**在链首与桌面 answerer 赛跑**：记录问题后同时等「下游链（桌面面板）的答案」与「远程页面的答案」，**谁先到就返回谁**；桌面先答则远程的迟到提交会被如实拒绝（`ok:false`），远程先答则工具结果照常回填、桌面面板随 `tool/result` 自然结算。两条路都不需要改写 Host 内部状态。
-  - `(Recommended)` / `（推荐）` 标记（桌面 `parseRecommendedLabel` 的两套写法都认）会把**第一个**选项**预选**为草稿，用户仍需提交；这里照做，并在该选项旁显示「推荐」chip 说明初始选中态的来源。
+  - **作答路径（与捕获同样关键）**：`ctx.userQuestions.answer()` 内部要求该提问已在 `continued(agent)` 里（即**已超时转为"待续答"的 timed 提问**），否则直接返回 `false`——桌面正在**同步等待**的提问（DSH 当前 `timed: false` 的情形）不在其中，远程端用那个 API 答不了。做法是**在链首与桌面 answerer 赛跑**：记录问题后同时等「下游链（桌面面板）的答案」与「远程页面的答案」，谁先到返回谁；桌面先答则远程迟到提交被如实拒绝（`ok:false`），远程先答则工具结果回填、桌面面板随 `tool/result` 结算。**观察者收到的瀑布载荷里没有 `wait`**（实测 `Object.keys = [questions, agent, signal]`，`missingWait` 计数即此），所以等待中的瀑布用「Session + 问题 id 签名」与日志已捕获的记录**配对**，拿到日志里的真实 callId 后再挂远程通道；`/api/diagnose` 的 `lastRequest` 会记录这份 keys。
+  - `(Recommended)` / `（推荐）` 标记（桌面 `parseRecommendedLabel` 两套写法都认）会把**第一个**选项**预选**为草稿；自由输入**不会**清掉已选项，提交时按桌面规则归一——单选带自定义文本则 `selected: []`，多选两者都送（`answerItems`）。
 - **审批**：只展示不代答（见下）。
 
 ### 重新构建 UI
