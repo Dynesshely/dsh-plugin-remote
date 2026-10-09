@@ -134,6 +134,24 @@ export function initialDraft (question) {
 }
 
 /**
+ * Build the answer batch sent to the Host.
+ *
+ * Mirrors the Desktop: a typed answer replaces the picked options on a single-select question, while a
+ * multi-select question keeps both — and typing in the box never clears what is already drafted.
+ * @param drafts - `{ id, selected, custom }` drafts, one per question.
+ * @param questions - normalized questions.
+ * @returns `{ id, selected, custom? }[]`.
+ */
+export function answerItems (drafts, questions) {
+  return (Array.isArray(drafts) ? drafts : []).map((draft) => {
+    const custom = String(draft.custom ?? '').trim()
+    const question = (Array.isArray(questions) ? questions : []).find((entry) => entry.id === draft.id)
+    const selected = custom !== '' && question?.multiSelect !== true ? [] : [...(draft.selected ?? [])]
+    return { id: draft.id, selected, ...(custom === '' ? {} : { custom }) }
+  })
+}
+
+/**
  * @param answers - parsed answers.
  * @param id - question id.
  * @returns the answer for that question, or undefined.

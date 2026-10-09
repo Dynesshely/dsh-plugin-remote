@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import {
   allAnswered,
+  answerItems,
   answerOf,
   initialDraft,
   isAnswered,
@@ -154,6 +155,18 @@ check('the recommended first option starts pre-selected', () => {
     { id: 'x', question: 'q', options: [{ label: 'A' }, { label: 'B（Recommended）' }] },
   ])[0]
   assert.deepEqual(initialDraft(late).selected, [], 'only the first option counts, like the Desktop')
+})
+
+check('a typed answer replaces a single choice but adds to a multi-select', () => {
+  const questions = parseQuestionArgs('ask_user_question', ARGS)
+  const drafts = [
+    { id: 'scope', selected: ['只改 UI'], custom: '顺便把文档也改了' },
+    { id: 'targets', selected: ['桌面'], custom: '再加一台平板' },
+  ]
+  const answers = answerItems(drafts, questions)
+  assert.deepEqual(answers[0], { id: 'scope', selected: [], custom: '顺便把文档也改了' }, 'single select: the text wins')
+  assert.deepEqual(answers[1], { id: 'targets', selected: ['桌面'], custom: '再加一台平板' }, 'multi select: both are sent')
+  assert.deepEqual(answerItems([{ id: 'targets', selected: ['桌面'], custom: '  ' }], questions), [{ id: 'targets', selected: ['桌面'] }], 'blank text is dropped')
 })
 
 if (failures === 0) {

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { answerOf, initialDraft, normalizeQuestions } from '../lib/questions.js'
+import { answerItems, answerOf, initialDraft, normalizeQuestions } from '../lib/questions.js'
 import { answerQuestion } from '../lib/store.js'
 import AppIcon from './AppIcon.vue'
 
@@ -97,12 +97,11 @@ function choose (question, option) {
   if (next < model.value.length) index.value = next
 }
 
-/** Record free text as the answer for a question. */
+/** Record free text as the answer for a question, without disturbing what is already picked. */
 function writeCustom (question, value) {
   const draft = drafts.value.find((entry) => entry.id === question.id)
   if (draft === undefined) return
   draft.custom = value
-  if (value !== '') draft.selected = []
   error.value = ''
 }
 
@@ -117,12 +116,7 @@ async function submit () {
   }
   busy.value = true
   try {
-    const answers = drafts.value.map((draft) => ({
-      id: draft.id,
-      selected: draft.selected,
-      ...(draft.custom.trim() === '' ? {} : { custom: draft.custom.trim() }),
-    }))
-    const accepted = await answerQuestion(props.callId, answers)
+    const accepted = await answerQuestion(props.callId, answerItems(drafts.value, model.value))
     submitted.value = accepted
     if (!accepted) error.value = '提交失败，请重试'
   } finally {
