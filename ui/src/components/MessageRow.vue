@@ -6,7 +6,11 @@ import ToolCard from './ToolCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import AppIcon from './AppIcon.vue'
 
-const props = defineProps({ item: { type: Object, required: true } })
+const props = defineProps({
+  item: { type: Object, required: true },
+  /** True while the run is working on this prompt, which adds the iridescent ring. */
+  active: { type: Boolean, default: false },
+})
 
 const showReasoning = ref(false)
 const showNote = ref(false)
@@ -15,7 +19,8 @@ const openNote = ref(-1)
 const groupOpen = ref(false)
 const zoom = ref('')
 
-const html = computed(() => (props.item.kind === 'assistant' ? renderMarkdown(props.item.text) : ''))
+// Both sides of the conversation render Markdown: what the user typed is Markdown source.
+const html = computed(() => (props.item.kind === 'assistant' || props.item.kind === 'user' ? renderMarkdown(props.item.text) : ''))
 const reasoning = computed(() => String(props.item.reasoning ?? '').trim())
 /** The reasoning chain renders as markdown too, computed only while it is open. */
 const reasoningHtml = computed(() => (showReasoning.value ? renderMarkdown(reasoning.value) : ''))
@@ -50,7 +55,10 @@ const groupState = computed(() => {
 <template>
   <!-- user -->
   <div v-if="item.kind === 'user'" class="rise flex justify-end">
-    <div class="max-w-[92%] rounded-3xl rounded-br-lg border border-blue-300/50 bg-gradient-to-b from-blue-500 to-blue-600 px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap break-words text-white shadow-[0_10px_30px_-14px_rgb(37_99_235/0.9)]">
+    <div
+      class="prompt-glass max-w-[92%] px-4 py-2.5 text-[15px] leading-relaxed break-words"
+      :class="active ? 'is-running' : ''"
+    >
       <div v-if="images.length" class="mb-1.5 flex flex-wrap gap-2">
         <button
           v-for="image in images"
@@ -63,8 +71,8 @@ const groupState = computed(() => {
           <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-blue-50/80">加载中…</span>
         </button>
       </div>
-      <span v-if="item.text">{{ item.text }}</span>
-      <div v-if="item.files?.length" class="mt-1 flex flex-wrap gap-1 text-[11px] text-blue-50/90">
+      <div v-if="item.text" class="md" v-html="html" />
+      <div v-if="item.files?.length" class="mt-1 flex flex-wrap gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
         <span v-for="file in item.files" :key="file">{{ file }}</span>
       </div>
 
@@ -74,7 +82,7 @@ const groupState = computed(() => {
           v-for="(note, index) in item.notes"
           :key="index"
           type="button"
-          class="inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/15 px-2 py-0.5 text-[10px] text-blue-50/90 transition-colors hover:bg-white/25"
+          class="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/60 px-2 py-0.5 text-[10px] text-zinc-500 transition-colors hover:bg-white/80 dark:border-white/10 dark:bg-white/[0.08] dark:text-zinc-400"
           @click="openNote = openNote === index ? -1 : index"
         >
           <AppIcon name="info" :size="10" />
@@ -84,7 +92,7 @@ const groupState = computed(() => {
       </div>
       <div
         v-if="openNote >= 0 && item.notes?.[openNote]"
-        class="mt-1 rounded-xl bg-black/15 px-2 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap text-blue-50/85"
+        class="mt-1 rounded-xl bg-white/60 px-2 py-1.5 text-[11px] leading-relaxed whitespace-pre-wrap text-zinc-500 dark:bg-black/25 dark:text-zinc-400"
       >
         {{ item.notes[openNote].text }}
         <span v-if="item.notes[openNote].sourceKind" class="mt-1 block text-[9px] tracking-wide text-blue-50/60">

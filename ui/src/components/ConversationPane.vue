@@ -30,6 +30,16 @@ const THEMES = [
 /** One rail tick per user prompt. */
 const prompts = computed(() => promptTicks(transcriptItems.value))
 
+/**
+ * The prompt the current run is working on: the last user row while the turn is running, which is the
+ * one the animated ring marks. Empty when nothing is running.
+ */
+const activePromptKey = computed(() => {
+  if (state.telemetry.running !== true) return ''
+  const last = [...transcriptItems.value].reverse().find((item) => item.kind === 'user')
+  return last?.key ?? ''
+})
+
 /** @returns the transcript item element for one key, if it is rendered. */
 function itemElement (key) {
   const node = scroller.value
@@ -192,7 +202,8 @@ onBeforeUnmount(() => {
             {{ state.selected === undefined ? '从左侧选择一个会话' : '这个会话还没有消息' }}
           </p>
           <div v-for="item in transcriptItems" :key="item.key" :data-item-key="item.key">
-            <MessageRow :item="item" />
+            <!-- The prompt the run is currently working on gets the animated iridescent ring. -->
+            <MessageRow :item="item" :active="item.key === activePromptKey" />
           </div>
 
           <!-- live attempt: reasoning stays collapsed, the answer streams in place -->

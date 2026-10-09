@@ -165,6 +165,277 @@ body {
     @apply inline-block shrink-0 overflow-hidden rounded-[10px] ring-1 ring-white/60 dark:ring-white/10;
   }
 
+  /*
+   * Prompt bubble: the tool-chip material (`.card`), plus the blue glow that marks a user turn.
+   *
+   * Same fill, border, blur and neutral shadow as a tool call chip; the only additions are a faint
+   * blue cast in the glass and the blue halo around it.
+   */
+  .prompt-glass {
+    @apply relative isolate rounded-2xl rounded-br-lg border border-white/60 bg-white/60
+      text-zinc-700 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
+      dark:text-zinc-100;
+    background-image:
+      linear-gradient(168deg, rgb(96 165 250 / 0.22) 0%, rgb(37 99 235 / 0.12) 55%, rgb(29 78 216 / 0.2) 100%);
+    box-shadow:
+      /* specular highlights, on top of the chip's own material */
+      inset 0 1px 0 rgb(255 255 255 / 0.55),
+      inset 0 -18px 28px -22px rgb(255 255 255 / 0.55),
+      inset 0 0 0 1px rgb(255 255 255 / 0.18),
+      0 8px 30px -12px rgb(15 23 42 / 0.18),
+      0 10px 30px -18px rgb(37 99 235 / 0.5),
+      0 22px 56px -34px rgb(37 99 235 / 0.45);
+  }
+  /* Specular sheen: two soft pools of light and a diagonal band, behind the text. */
+  .prompt-glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      radial-gradient(42% 60% at 12% 0%, rgb(255 255 255 / 0.5), transparent 62%),
+      radial-gradient(36% 48% at 88% 100%, rgb(255 255 255 / 0.28), transparent 70%),
+      linear-gradient(108deg, transparent 30%, rgb(255 255 255 / 0.22) 46%, transparent 60%);
+  }
+  /* Dark mode: the same chip material, a cooler cast, and a quieter halo. */
+  .dark .prompt-glass {
+    background-image:
+      linear-gradient(168deg, rgb(96 165 250 / 0.18) 0%, rgb(37 99 235 / 0.1) 55%, rgb(30 58 138 / 0.22) 100%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.28),
+      inset 0 -18px 28px -22px rgb(255 255 255 / 0.22),
+      inset 0 0 0 1px rgb(255 255 255 / 0.1),
+      0 10px 40px -16px rgb(0 0 0 / 0.7),
+      0 10px 30px -18px rgb(37 99 235 / 0.4),
+      0 22px 56px -34px rgb(37 99 235 / 0.35);
+  }
+  .dark .prompt-glass::before {
+    background:
+      radial-gradient(42% 60% at 12% 0%, rgb(255 255 255 / 0.3), transparent 62%),
+      radial-gradient(36% 48% at 88% 100%, rgb(255 255 255 / 0.16), transparent 70%),
+      linear-gradient(108deg, transparent 30%, rgb(255 255 255 / 0.12) 46%, transparent 60%);
+  }
+
+  /*
+   * Running prompt: an iridescent ring drawn **on the border only**.
+   *
+   * The conic gradient is masked down to a 2px frame (content box excluded), so nothing spills into
+   * the bubble or floods the area around it. The angle animates through a registered custom property,
+   * which sweeps the gradient without rotating the layer (that would distort the ring). Browsers
+   * without `@property` support simply show a static rainbow frame.
+   */
+  @property --rc-sheen {
+    syntax: '<angle>';
+    initial-value: 0deg;
+    inherits: false;
+  }
+  .prompt-glass.is-running::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    padding: 2px;
+    background: conic-gradient(
+      from var(--rc-sheen),
+      rgb(96 165 250) 0deg,
+      rgb(167 139 250) 70deg,
+      rgb(240 171 252) 140deg,
+      rgb(103 232 249) 210deg,
+      rgb(147 197 253) 280deg,
+      rgb(96 165 250) 360deg
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: rc-sheen-spin 4.5s linear infinite;
+  }
+  @keyframes rc-sheen-spin {
+    to { --rc-sheen: 360deg; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .prompt-glass.is-running::after { animation: none; }
+  }
+
+  /* -------------------------------------------------------------- composer editor */
+
+  /*
+   * CodeMirror 6, themed to disappear into the glass card.
+   *
+   * CodeMirror brings its own structure (.cm-editor / .cm-scroller / .cm-content / .cm-line), so the
+   * theme is stated in the app's own terms: the page font, the page's text colour and caret, no
+   * gutters, no fills, and the same type scale the transcript uses. The `rc-md-*` classes are the
+   * render layer's output — they are what makes hidden syntax look like the rendered Markdown.
+   */
+  .rc-md { min-height: 2.75rem; }
+  .rc-md .cm-editor {
+    min-height: 2.75rem;
+    background: transparent;
+    color: #18181b;
+    caret-color: #18181b;
+  }
+  .dark .rc-md .cm-editor {
+    color: #f4f4f5;
+    caret-color: #f4f4f5;
+  }
+  /*
+   * CodeMirror's own base theme draws a dotted outline on focus, a black caret and a black cursor
+   * element. All three are stated here with enough weight to beat it, in both themes.
+   */
+  .rc-md .cm-editor,
+  .rc-md .cm-scroller,
+  .rc-md .cm-content,
+  .rc-md .cm-line,
+  .rc-md .cm-editor.cm-focused {
+    border: 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+  }
+  .rc-md .cm-activeLine,
+  .rc-md .cm-activeLineGutter { background: transparent !important; }
+  .rc-md .cm-editor,
+  .rc-md .cm-content { caret-color: #18181b !important; }
+  .dark .rc-md .cm-editor,
+  .dark .rc-md .cm-content { caret-color: #f4f4f5 !important; }
+  .rc-md .cm-scroller {
+    @apply px-3.5 py-2.5 text-[15px] leading-relaxed;
+    max-height: 38dvh;
+    overflow-y: auto;
+    font-family: var(--font-sans);
+    line-height: 1.625;
+  }
+  .rc-md .cm-content { padding: 0; caret-color: inherit; }
+  .rc-md .cm-line { padding: 0; }
+  .rc-md .cm-cursor,
+  .rc-md .cm-dropCursor {
+    border-left: 1.5px solid #18181b !important;
+    margin-left: -0.5px;
+  }
+  .dark .rc-md .cm-cursor,
+  .dark .rc-md .cm-dropCursor { border-left-color: #f4f4f5 !important; }
+  .rc-md .cm-selectionBackground,
+  .rc-md .cm-content ::selection { background: rgb(96 165 250 / 0.35) !important; }
+  .rc-md .cm-editor.cm-focused .cm-selectionBackground { background: rgb(96 165 250 / 0.4) !important; }
+  .rc-md .cm-panels { display: none; }
+
+  /* Render layer. */
+  .rc-md-strong { font-weight: 700; }
+  .rc-md-em { font-style: italic; }
+  .rc-md-strike { text-decoration: line-through; }
+  /* Inline code reads as a chip: muted fill, tight padding, small radius. */
+  .rc-md-code {
+    @apply font-mono;
+    font-size: 0.8125rem;
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.4rem;
+    background: rgb(24 24 27 / 0.07);
+  }
+  .dark .rc-md-code { background: rgb(255 255 255 / 0.12); }
+  .rc-md-link { color: rgb(37 99 235); text-decoration: underline; text-underline-offset: 2px; }
+  .dark .rc-md-link { color: rgb(96 165 250); }
+  .rc-md-h1 { font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
+  .rc-md-h2 { font-size: 1.125rem; font-weight: 600; line-height: 1.3; }
+  .rc-md-h3 { font-size: 1rem; font-weight: 600; line-height: 1.3; }
+  .rc-md-h4,
+  .rc-md-h5,
+  .rc-md-h6 { font-size: 0.9375rem; font-weight: 600; line-height: 1.3; }
+  .rc-md-quote {
+    border-left: 2px solid rgb(148 163 184 / 0.7);
+    padding-left: 0.75rem;
+    color: rgb(113 113 122);
+  }
+  .dark .rc-md-quote { color: rgb(161 161 170); }
+  /* The bullet mark is replaced away, so the line draws its own. */
+  .dark .rc-md-codeblock {
+    background: rgb(255 255 255 / 0.08);
+  }
+  .rc-md-hr {
+    border-top: 1px solid rgb(148 163 184 / 0.4);
+    font-size: 0;
+    line-height: 0.5rem;
+  }
+  .dark .rc-md-hr { border-top-color: rgb(148 163 184 / 0.3); }
+
+  /* CodeMirror's placeholder, themed to the composer. */
+  .rc-md .cm-placeholder {
+    color: rgb(113 113 122 / 0.75);
+    font-style: normal;
+    pointer-events: none;
+  }
+  .dark .rc-md .cm-placeholder { color: rgb(161 161 170 / 0.7); }
+
+  /* The bullet replaces the source marker in place, so nested items align with their own text. */
+  .rc-md-bullet {
+    @apply font-mono;
+    color: rgb(113 113 122 / 0.9);
+    padding-right: 0.15rem;
+  }
+  .dark .rc-md-bullet { color: rgb(161 161 170 / 0.9); }
+
+  /*
+   * Code blocks, restated here so these win on source order: the fill spans the composer's width
+   * (the negative inline margin cancels the scroller's padding), the first and last body lines carry
+   * the corners, and the fence lines stay unfilled so the block reads as one rounded slab whose
+   * radius matches the card the composer sits in.
+   */
+  .rc-md-codeblock {
+    margin-inline: 0;
+    padding-inline: 0.625rem;
+    box-shadow: none;
+    border-radius: 0;
+  }
+  /* Stacked filled lines can show a hairline seam; one pixel of overlap removes it. */
+  .rc-md-codeblock {
+    border: 0 !important;
+    outline: none !important;
+  }
+  .rc-md-codeblock-first {
+  }
+  /* The language chip, sitting where the opening fence was. */
+  .rc-md-langchip {
+    @apply font-mono;
+    font-size: 0.6875rem;
+    line-height: 1.4;
+    padding: 0 0.35rem;
+    border-radius: 0.375rem;
+    color: rgb(113 113 122);
+    background: rgb(24 24 27 / 0.07);
+  }
+  .dark .rc-md-langchip {
+    color: rgb(161 161 170);
+    background: rgb(255 255 255 / 0.12);
+  }
+  .rc-md-codeblock-first {
+    border-top-left-radius: 0.75rem;
+    border-top-right-radius: 0.75rem;
+  }
+  .rc-md-codeblock-last {
+    border-bottom-left-radius: 0.75rem;
+    border-bottom-right-radius: 0.75rem;
+  }
+  /*
+   * Code block fill.
+   *
+   * Solid colours, not translucent ones: CodeMirror paints each line as its own box, and a per-line
+   * alpha fill stacks wherever boxes meet — which reads as a bright hairline in the dark theme and as
+   * nothing at all on the light one. An opaque value per theme is visible on both and cannot stack.
+   */
+  .rc-md-codeblock { background: #eff2f6; }
+  .dark .rc-md-codeblock { background: #171c23; }
+  /*
+   * CodeMirror paints each line as its own box, so adjacent opaque fills can still leave a sub-pixel
+   * gap. Overlapping by one pixel closes it: the fills are opaque and identical, so the overlap is
+   * invisible — it only ever brightened when the fill was translucent. The last line is excluded so
+   * the block does not creep into whatever follows it.
+   */
+  .rc-md-codeblock:not(.rc-md-codeblock-last) {
+    margin-bottom: -1px;
+    padding-bottom: 1px;
+  }
   /* -------------------------------------------------------------- controls */
 
   .btn {

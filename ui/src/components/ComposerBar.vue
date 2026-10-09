@@ -1,8 +1,10 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { cancelTurn, selectModel, selectPermission, sendPrompt, stageImage, state } from '../lib/store.js'
 import { mobile, reportComposerOverflow } from '../lib/layout.js'
 import ComboBox from './ComboBox.vue'
+// The editor carries CodeMirror, so it loads as its own chunk: the transcript paints first.
+const MarkdownComposer = defineAsyncComponent(() => import('./MarkdownComposer.vue'))
 import StatusStrip from './StatusStrip.vue'
 import AppIcon from './AppIcon.vue'
 
@@ -64,13 +66,11 @@ const infoRows = computed(() => {
   ]
 })
 
-/** Grow the textarea with its content, up to a share of the viewport. */
+/** Keep the document area scrolled to the caret after a programmatic change. */
 async function autosize () {
   await nextTick()
-  const node = area.value
-  if (node === null) return
-  node.style.height = 'auto'
-  node.style.height = `${String(Math.min(node.scrollHeight, window.innerHeight * 0.4))}px`
+  // The editor sizes itself; this only matters for anything that still measures the composer.
+  void area
 }
 
 async function send () {
@@ -126,12 +126,10 @@ async function onPaste (event) {
   for (const file of images) await stage(file)
 }
 
-function onKeydown (event) {
-  // Matching the Desktop composer after the Enter-swap plugin: Ctrl/Cmd+Enter sends, Enter breaks
-  // the line. The send button stays available for touch.
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
-    event.preventDefault()
-    void send()
+/** Image files handed over by the editor (paste or drop) are staged like the picker's. */
+async function attachFiles (files) {
+  for (const file of files) {
+    if (file.type.startsWith('image/')) await stage(file)
   }
 }
 
@@ -248,15 +246,12 @@ const placeholder = computed(() => {
         </div>
       </div>
 
-      <textarea
-        ref="area"
+      <MarkdownComposer
         v-model="text"
-        rows="1"
-        class="max-h-[38dvh] min-h-[2.75rem] w-full resize-none border-0 bg-transparent px-3.5 py-2.5 text-[15px] outline-none placeholder:text-zinc-400"
         :placeholder="placeholder"
         :disabled="state.selected === undefined"
-        @input="autosize"
-        @keydown="onKeydown"
+        @submit="send"
+        @files="attachFiles"
       />
 
       <!-- Left cluster: attachment intake and the telemetry strip. -->
