@@ -422,9 +422,98 @@ export function apply (ctx, config) {
   const clients = new Set()
   /** Pending questions, keyed by tool-call id. */
   const questions = new Map()
-  /** Pending approvals, keyed by a synthetic key. */
+  /**
+ * Per-Session telemetry, folded from the same events the page folds.
+ *
+ * The page only knows what it has watched arrive, so an idle Session — or a freshly loaded one — had
+ * nothing to show. Keeping the counters here means the last turn's numbers survive both idleness and a
+ * page reload, which is what the composer's status strip needs.
+ */
+const telemetryBySession = new Map()
+
+/**
+ * Fold one Session event into that Session's telemetry snapshot.
+ * @param sessionId - the Session the event belongs to.
+ * @param event - the durable event.
+ */
+function foldSessionTelemetry (sessionId, event) {
+  if (sessionId === '' || event === null || typeof event !== 'object') return
+  const type = event.type
+  if (type !== 'turn/start' && type !== 'step/start' && type !== 'assistant/message'
+    && type !== 'request/context' && type !== 'request/header') return
+  const data = event.data ?? {}
+  const time = typeof event.time === 'number' ? event.time : Date.now()
+  const record = telemetryBySession.get(sessionId) ?? {
+    turn: 0,
+    step: 0,
+    provider: '',
+    model: '',
+    contextWindow: 0,
+    totalInput: 0,
+    totalOutput: 0,
+    totalCacheRead: 0,
+    totalCacheWrite: 0,
+    totalReasoning: 0,
+    lastInput: 0,
+    tokensPerSecond: 0,
+    turnStartedAt: 0,
+    at: 0,
+  }
+  if (type === 'turn/start') {
+    record.turn = Number(data.turn ?? record.turn)
+    record.turnStartedAt = time
+  } else if (type === 'step/start') {
+    record.step = Number(data.step ?? record.step)
+  } else if (type === 'assistant/message') {
+    const usage = data.usage
+    if (usage !== undefined) {
+      record.totalInput += Number(usage.inputTokens ?? 0)
+      record.totalOutput += Number(usage.outputTokens ?? 0)
+      record.totalCacheRead += Number(usage.cacheReadTokens ?? 0)
+      record.totalCacheWrite += Number(usage.cacheWriteTokens ?? 0)
+      record.totalReasoning += Number(usage.reasoningTokens ?? 0)
+      record.lastInput = Number(usage.inputTokens ?? 0) + Number(usage.cacheReadTokens ?? 0) + Number(usage.cacheWriteTokens ?? 0)
+      const elapsed = record.turnStartedAt === 0 ? 0 : (time - record.turnStartedAt) / 1000
+      if (elapsed > 0.2 && Number(usage.outputTokens ?? 0) > 0) {
+        record.tokensPerSecond = Number(usage.outputTokens) / elapsed
+      }
+    }
+  } else if (type === 'request/context') {
+    record.provider = String(data.provider ?? record.provider)
+    record.model = String(data.model ?? record.model)
+    if (typeof data.contextWindow === 'number') record.contextWindow = data.contextWindow
+  } else if (type === 'request/header') {
+    const config = data.header?.config
+    if (config !== undefined) {
+      record.provider = String(config.provider ?? record.provider)
+      record.model = String(config.model ?? record.model)
+    }
+  }
+  record.at = time
+  telemetryBySession.set(sessionId, record)
+}
+
+/** Pending approvals, keyed by a synthetic key. */
   const approvals = new Map()
-  /** A record this old has certainly been decided; it is dropped rather than shown forever. */
+  /** Content types the image proxy will serve for a workspace file, by extension. */
+const IMAGE_TYPE_BY_EXTENSION = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+}
+
+/** How long the image proxy waits for an upstream picture before giving up. */
+const IMAGE_TIMEOUT_MS = 20_000
+/** Largest picture the proxy will hand back, so one screenshot cannot exhaust the page. */
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024
+
+/** A record this old has certainly been decided; it is dropped rather than shown forever. */
   const APPROVAL_TTL_MS = 30 * 60 * 1000
   /** Failed-login counters keyed by peer address. */
   const attempts = new Map()
@@ -701,12 +790,119 @@ export function apply (ctx, config) {
           sessions,
           workspaces,
           ...managementState(),
+          // The counters the page seeds itself from, so an idle Session still shows its last numbers.
+          telemetry: Object.fromEntries(telemetryBySession),
           pending: pendingPayload(),
           urls: candidateUrls(settings.bind, boundPort),
           bind: settings.bind,
         })
       } catch (error) {
         json(500, { error: String(error?.message ?? error) })
+      }
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/image') {
+      // Pictures in Session content are a mess of two different things: sometimes a real URL, and very
+      // often a path that only *looks* like one — the Harness's own file server answers an unknown path
+      // with its SPA shell (200, text/html), so the browser gets no image and no error either.
+      //
+      // So the Host resolves it the way the Session meant it: first as a file inside a workspace, then
+      // as a URL it fetches itself. Either way the bytes are served from this origin, which is what the
+      // page's `img-src 'self'` requires and what lets the phone show a picture it could never reach.
+      //
+      // Only http(s) is accepted, only a real image is passed through, and the body is size-capped.
+      const send = (body, type) => {
+        response.writeHead(200, {
+          'content-type': type,
+          'content-length': String(body.byteLength),
+          'cache-control': 'private, max-age=300',
+          'x-content-type-options': 'nosniff',
+        })
+        response.end(body)
+      }
+
+      // 1. A file on this machine: either an explicit path (tools name the screenshot they just
+      //    wrote) or the path part of a URL that the local file server does not actually serve.
+      const explicit = url.searchParams.get('path') ?? ''
+      const candidates = []
+      if (explicit !== '') {
+        candidates.push(explicit)
+      } else {
+        try {
+          const pathname = decodeURIComponent(new URL(url.searchParams.get('url') ?? '').pathname)
+          candidates.push(pathname.replace(/^[/\\]+/u, ''))
+        } catch {
+          /* the URL branch below will report it */
+        }
+      }
+      for (const wanted of candidates) {
+        const type = IMAGE_TYPE_BY_EXTENSION[extname(wanted).toLowerCase()]
+        if (type === undefined) continue
+        const absolute = /^[A-Za-z]:[\\/]/u.test(wanted) || wanted.startsWith('\\\\')
+        for (const workspace of workspaceState.items) {
+          if (workspace.path === '') continue
+          const root = resolve(workspace.path)
+          const candidate = absolute ? resolve(wanted) : resolve(root, wanted)
+          // Never step outside a workspace root.
+          if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) continue
+          try {
+            if (!statSync(candidate).isFile()) continue
+            const body = readFileSync(candidate)
+            if (body.byteLength > MAX_IMAGE_BYTES) {
+              json(413, { error: 'image too large' })
+              return
+            }
+            send(body, type)
+            return
+          } catch {
+            /* try the next workspace, then the network */
+          }
+        }
+      }
+
+      // 2. A real URL, fetched here because the phone may not be able to reach it.
+      const target = url.searchParams.get('url') ?? ''
+      if (target === '') {
+        json(404, { error: 'no workspace file matches that path' })
+        return
+      }
+      let parsed
+      try {
+        parsed = new URL(target)
+      } catch {
+        json(400, { error: 'bad url' })
+        return
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        json(400, { error: 'only http(s) images can be proxied' })
+        return
+      }
+      try {
+        const upstream = await fetch(parsed, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
+          headers: { accept: 'image/*' },
+        })
+        if (!upstream.ok) {
+          json(502, { error: `upstream ${String(upstream.status)}` })
+          return
+        }
+        const type = upstream.headers.get('content-type') ?? ''
+        if (!type.startsWith('image/')) {
+          // The usual reason: the server answered with its SPA shell instead of the file.
+          json(415, { error: `not an image (${type === '' ? 'unknown type' : type}), and no workspace file matches that path` })
+          return
+        }
+        const body = Buffer.from(await upstream.arrayBuffer())
+        if (body.byteLength > MAX_IMAGE_BYTES) {
+          json(413, { error: 'image too large' })
+          return
+        }
+        send(body, type)
+      } catch (error) {
+        // A name the Host cannot resolve, a refused connection, or a certificate it will not accept.
+        json(502, { error: String(error?.message ?? error) })
       }
       return
     }
@@ -1370,6 +1566,7 @@ export function apply (ctx, config) {
      * retires the record, whether this page, the desktop, or a timeout settled it.
      */
     const offSessionEvents = ctx.on('session/event', (session, event) => {
+      foldSessionTelemetry(String(session?.id ?? ''), event)
       const type = event?.type
       if (type === 'tool/call') {
         // The tool is running, so its approval was granted: retire any card for it. This holds even

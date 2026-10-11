@@ -10,6 +10,111 @@
  * arrives here through the shell's `workspaceController.follow()` subscription.
  */
 
+import { spawn } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { handleModelMeta } from './model-meta.js'
+/**
+ * The usage module, re-imported whenever its file changes.
+ *
+ * It is a sibling module rather than part of this file, and Node caches modules by URL — so importing it
+ * statically would freeze it for the life of the process. The mtime query is the same trick the shell
+ * uses on this file, which is what makes an edit to the usage code take effect without a DSH restart.
+ */
+let usageModule = { module: undefined, mtimeMs: 0 }
+
+/** @returns the freshly imported usage module. */
+async function loadUsage () {
+  const url = new URL('./usage.js', import.meta.url)
+  const info = statSync(fileURLToPath(url))
+  if (usageModule.module === undefined || usageModule.mtimeMs !== info.mtimeMs) {
+    const fresh = new URL(url.href)
+    fresh.searchParams.set('v', String(info.mtimeMs))
+    usageModule = { module: await import(fresh.href), mtimeMs: info.mtimeMs }
+  }
+  return usageModule.module
+}
+
+/**
+ * @param api - the shell context.
+ * @returns whether the usage module handled the request.
+ */
+async function usageRoutes (api) {
+  try {
+    const module = await loadUsage()
+    return await module.handleUsage(api)
+  } catch (error) {
+    api.json(500, { error: `usage module failed: ${String(error?.message ?? error)}` })
+    return true
+  }
+}
+
+/** The desktop app's executable name, used when the Host does not run as the app itself. */
+const APP_NAME = 'DeepSeek Harness.exe'
+
+/** @returns the launcher this machine would start, so the page can show it and be trusted about it. */
+function launcherPath () {
+  const running = process.execPath
+  if (running.toLowerCase().endsWith(APP_NAME.toLowerCase())) return running
+  const local = process.env.LOCALAPPDATA ?? ''
+  return local === '' ? running : `${local}\\Programs\\DeepSeek Harness\\${APP_NAME}`
+}
+
+/**
+ * Start the out-of-process helper that closes (and optionally relaunches) DSH.
+ *
+ * It has to be a separate process: quitting DSH takes this Host down with it, so nothing inside would be
+ * left to bring it back. The helper is detached and its stdio is ignored, which is what lets it outlive
+ * the app it is about to close.
+ * @param mode - `restart` or `exit`.
+ * @param port - the remote-control port to watch, so the helper can tell the old instance is really gone.
+ * @returns the helper's process id.
+ */
+async function spawnControl (mode, port) {
+  const helper = fileURLToPath(new URL('../tools/dsh-control.mjs', import.meta.url))
+  const launcher = launcherPath()
+  const runtime = await nodeRuntime()
+  const env = { ...process.env }
+  // When the Host *is* the Electron binary, it must be told to behave like plain node to run a script.
+  if (runtime === process.execPath && process.versions.electron !== undefined) env.ELECTRON_RUN_AS_NODE = '1'
+  const child = spawn(runtime, [helper, mode, '--exe', launcher, '--port', String(port)], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env,
+  })
+  child.unref()
+  return child.pid
+}
+
+/**
+ * @returns a plain node executable to run the helper with.
+ *
+ * This matters more than it looks. The helper's job is to run `taskkill /IM "DeepSeek Harness.exe"`, which
+ * matches by image name — so a helper started as the app's own executable would kill *itself* before it
+ * could relaunch anything. That was the original bug: the app quit, and nothing came back. The bundled
+ * node runtime has a different image name, so it survives the kill.
+ *
+ * The import is dynamic because the Host is the Electron binary: this is the only place that needs to
+ * enumerate directories.
+ */
+async function nodeRuntime () {
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  if (home !== '') {
+    try {
+      const { readdirSync } = await import('node:fs')
+      const root = `${home}\\.dsh\\dsh-runtimes`
+      for (const name of readdirSync(root)) {
+        const candidate = `${root}\\${name}\\dependencies\\node\\bin\\node.exe`
+        if (existsSync(candidate)) return candidate
+      }
+    } catch {
+      /* fall through to the app binary, which the helper will refuse and log */
+    }
+  }
+  return process.execPath
+}
+
 /** @returns the parsed body, or undefined after the shell replied 400. */
 async function bodyOf (api) {
   try {
@@ -232,15 +337,50 @@ async function create (api) {
   return true
 }
 
+/** Everything the page needs to describe this Host, and to be trusted about restarting it. */
+function dshInfo (api) {
+  const launcher = launcherPath()
+  api.json(200, {
+    ok: true,
+    launcher,
+    launcherExists: existsSync(launcher),
+    execPath: process.execPath,
+    pid: process.pid,
+    node: process.versions.node,
+    electron: process.versions.electron ?? null,
+    platform: process.platform,
+  })
+  return true
+}
+
+/** Restart or quit DSH through the detached helper. */
+async function dshControl (api, mode) {
+  const body = await bodyOf(api)
+  if (body === undefined) return true
+  const port = Number.isSafeInteger(body.port) && body.port > 0 ? body.port : 19400
+  try {
+    const pid = await spawnControl(mode, port)
+    api.json(200, { ok: true, mode, port, pid, launcher: launcherPath() })
+  } catch (error) {
+    api.json(500, { error: String(error?.message ?? error) })
+  }
+  return true
+}
+
 /**
  * One request from the shell.
  * @param api - `{ctx, request, url, json, readJson, broadcast, sessionsPayload, managementState, setPinned, setArchived}`.
  * @returns whether this module handled the request.
  */
 export async function handle (api) {
+  // Balance and usage live in their own module: the routes, the parsers and the stored keys together.
+  if (await usageRoutes(api)) return true
+  // Model capacity metadata, joined from the gateway catalogue.
+  if (await handleModelMeta(api)) return true
   const method = api.request.method
   if (method === 'GET') {
     if (api.url.pathname === '/api/presets') return await presets(api)
+    if (api.url.pathname === '/api/dsh/info') return dshInfo(api)
     return false
   }
   if (method !== 'POST') return false
@@ -250,6 +390,8 @@ export async function handle (api) {
     case '/api/session/fork': return await fork(api)
     case '/api/session/archive': return await archive(api)
     case '/api/session/create': return await create(api)
+    case '/api/dsh/restart': return await dshControl(api, 'restart')
+    case '/api/dsh/exit': return await dshControl(api, 'exit')
     default: return false
   }
 }

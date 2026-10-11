@@ -26,9 +26,15 @@ importers:
       '@lezer/markdown':
         specifier: ^1.8.0
         version: 1.8.0
+      '@lobehub/icons-static-svg':
+        specifier: ^1.95.1
+        version: 1.95.1
       dompurify:
         specifier: ^3.4.16
         version: 3.4.16
+      glightbox:
+        specifier: ^3.3.1
+        version: 3.3.1
       highlight.js:
         specifier: ^11.12.0
         version: 11.12.0
@@ -146,6 +152,9 @@ packages:
 
   '@lezer/markdown@1.8.0':
     resolution: {integrity: sha512-X6w3A2NpyhdtGqTWRJB8gR4QDXBaFMbTOs780ZdZ15KKCfBXOQTKcB3Vr+W6tqJHVlealt53tLmHRvOqPTQgYA==}
+
+  '@lobehub/icons-static-svg@1.95.1':
+    resolution: {integrity: sha512-Hw7EPPgVnC4NZLXBfTNJG6hyQgqECfUPC11VVXodPSr1aebKcFxDZlSpxhWwYNdCc6bhxps/x5TtXoPmfKH2ag==}
 
   '@marijn/find-cluster-break@1.0.4':
     resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
@@ -420,6 +429,9 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  glightbox@3.3.1:
+    resolution: {integrity: sha512-nXoKfJRnQTDaAFAw5799hjpfAAHx5aLvOLG0SIGudeMCwtHgO3P2/avNYapJ+SL4UEZxO2YNBPtq6pzMhSx42g==}
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
@@ -842,6 +854,8 @@ snapshots:
       '@lezer/common': 1.5.3
       '@lezer/highlight': 1.2.5
 
+  '@lobehub/icons-static-svg@1.95.1': {}
+
   '@marijn/find-cluster-break@1.0.4': {}
 
   '@oxc-project/types@0.152.0': {}
@@ -1049,6 +1063,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  glightbox@3.3.1: {}
 
   graceful-fs@4.2.11: {}
 
