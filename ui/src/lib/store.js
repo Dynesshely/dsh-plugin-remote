@@ -17,6 +17,8 @@ export const state = reactive({
   managed: false,
   /** Agent presets ("模式") the create dialog offers. */
   presets: [],
+  /** Per-Session telemetry snapshots the Host keeps, keyed by Session id. */
+  telemetryBySession: {},
   selected: undefined,
   pending: { questions: [], approvals: [] },
   events: [],
@@ -95,11 +97,70 @@ export function isPinned (sessionId) {
  * Render items for the transcript: messages, paired tool calls, and turn notices.
  * Tool results are attached to the call they answer, so one card shows both halves.
  */
+/**
+ * Reused item objects, keyed by item key.
+ *
+ * `transcriptItems` runs on every appended event. Rebuilding the items is cheap; re-rendering them is
+ * not — each row re-runs Markdown, highlighting and sanitising. Vue skips a child update when its
+ * props are unchanged, so handing back the *same* objects for unchanged rows is what keeps a long
+ * transcript cheap. Signatures only ever look at append-only quantities (lengths, counts, flags),
+ * which is exactly how these items change.
+ */
+const itemCache = new Map()
+const groupCache = new Map()
+
+/** @returns a signature that changes whenever the rendered content of an item would change. */
+function signatureOf (item) {
+  if (item.kind === 'user') {
+    return `user|${item.text}|${String(item.notes.length)}|${String(item.images.length)}|${String(item.files.length)}`
+  }
+  if (item.kind === 'assistant') {
+    return `assistant|${String(item.text.length)}|${String(item.reasoning.length)}|${String(item.images.length)}|${String(item.files.length)}`
+  }
+  if (item.kind === 'tool') {
+    return `tool|${item.name}|${String(item.args.length)}|${String(item.result?.length ?? -1)}|${String(item.error ?? '')}|${String(item.answers.length)}`
+  }
+  return `${item.kind}|${item.text ?? ''}`
+}
+
+/**
+ * @param item - a freshly built item.
+ * @returns the cached object when nothing about it changed, otherwise the new one.
+ */
+function stabilize (item) {
+  const previous = itemCache.get(item.key)
+  if (previous !== undefined && previous.signature === signatureOf(item)) return previous.item
+  const record = { signature: signatureOf(item), item }
+  itemCache.set(item.key, record)
+  return item
+}
+
+/** Groups are rebuilt each pass, so they are matched by name, count and child identity. */
+function stabilizeGroup (group) {
+  const previous = groupCache.get(group.key)
+  const same = previous !== undefined
+    && previous.group.name === group.name
+    && previous.group.count === group.count
+    && previous.group.items.length === group.items.length
+    && previous.group.items.every((child, index) => child === group.items[index])
+  if (same) return previous.group
+  groupCache.set(group.key, { group })
+  return group
+}
+
+/** Drop cached objects for a transcript that is being replaced wholesale. */
+function resetTranscriptCache () {
+  itemCache.clear()
+  groupCache.clear()
+}
+
 export const transcriptItems = computed(() => {
   const items = []
   const toolIndex = new Map()
   /** The most recent prompt, so injected notes can be folded into its bubble. */
   let lastUser = null
+  /** Accumulators for the turn being walked, emitted as one stats item when it ends. */
+  let turnStats = null
   for (const event of state.events) {
     const type = event.type
     const data = event.data ?? {}
@@ -128,7 +189,27 @@ export const transcriptItems = computed(() => {
       lastUser = item
       continue
     }
+    if (type === 'turn/start') {
+      turnStats = {
+        turn: Number(data.turn ?? 0),
+        startedAt: typeof event.time === 'number' ? event.time : Date.now(),
+        output: 0,
+        input: 0,
+        cache: 0,
+        steps: 0,
+      }
+      continue
+    }
+    if (type === 'step/start' && turnStats !== null) {
+      turnStats.steps = Math.max(turnStats.steps, Number(data.step ?? 0))
+      continue
+    }
     if (type === 'assistant/message') {
+      if (turnStats !== null && data.usage !== undefined) {
+        turnStats.output += Number(data.usage.outputTokens ?? 0)
+        turnStats.input += Number(data.usage.inputTokens ?? 0)
+        turnStats.cache += Number(data.usage.cacheReadTokens ?? 0) + Number(data.usage.cacheWriteTokens ?? 0)
+      }
       const parts = messageParts(data.message)
       // A step that only calls tools carries no text, reasoning, or media. Rendering it would add
       // an invisible item between two tool calls and break their run into separate cards.
@@ -187,6 +268,22 @@ export const transcriptItems = computed(() => {
       if (reason !== undefined && reason !== 'completed') {
         items.push({ kind: 'notice', key: `turn-${String(event.seq)}`, text: `本轮结束：${String(reason)}` })
       }
+      // One stats row per finished turn, so each answer carries what it cost.
+      if (turnStats !== null) {
+        const endedAt = typeof event.time === 'number' ? event.time : Date.now()
+        const seconds = Math.max(0, (endedAt - turnStats.startedAt) / 1000)
+        items.push({
+          kind: 'turnStats',
+          key: `turn-stats-${String(event.seq)}`,
+          seconds,
+          output: turnStats.output,
+          input: turnStats.input,
+          cache: turnStats.cache,
+          steps: turnStats.steps,
+          perSecond: seconds > 0.2 && turnStats.output > 0 ? turnStats.output / seconds : 0,
+        })
+        turnStats = null
+      }
       continue
     }
     if (type === 'model-retry' || type === 'turn-error') {
@@ -215,7 +312,9 @@ export const transcriptItems = computed(() => {
     }
     grouped.push(item)
   }
-  return grouped
+  // Prune first: the caches only need to outlive the transcript window.
+  if (itemCache.size > 4000) resetTranscriptCache()
+  return grouped.map((item) => (item.kind === 'toolGroup' ? stabilizeGroup(item) : stabilize(item)))
 })
 
 /* ---------------------------------------------------------------- context notes */
@@ -333,6 +432,7 @@ export async function loadState () {
     state.sessions = payload.sessions ?? []
     state.workspaces = payload.workspaces ?? []
     state.pending = payload.pending ?? { questions: [], approvals: [] }
+    if (payload.telemetry !== undefined) state.telemetryBySession = payload.telemetry
     installManagement(payload)
     state.unauthorized = false
     state.bootError = ''
@@ -398,11 +498,18 @@ function refreshSoon () {
 export async function selectSession (sessionId) {
   state.selected = sessionId
   state.events = []
+  resetTranscriptCache()
   state.live = { attemptId: undefined, text: '', reasoning: '' }
   state.streamError = ''
   state.hasOlder = true
   state.loadingOlder = false
   resetTelemetry()
+  // An idle Session still shows what its last turn produced: the Host keeps the counters, and this
+  // only overrides the run flag with the Session's own state.
+  const snapshot = state.telemetryBySession[sessionId]
+  if (snapshot !== undefined) {
+    Object.assign(state.telemetry, snapshot, { running: selectedSession.value?.running === true })
+  }
   source?.close()
   source = openStream(sessionId, {
     onFrame: handleFrame,
@@ -490,19 +597,37 @@ function resetTelemetry () {
   })
 }
 
+/** Events waiting for the next animation frame, so a burst costs one recompute rather than dozens. */
+let pendingEvents = []
+let pendingFlush
+
+/** Append the buffered events in one go. */
+function flushEvents () {
+  pendingFlush = undefined
+  if (pendingEvents.length === 0) return
+  state.events.push(...pendingEvents)
+  pendingEvents = []
+}
+
 /** Fold one SSE frame into the transcript and the telemetry counters. */
 function handleFrame (frame) {
   if (frame === null || typeof frame !== 'object') return
   if (frame.type === 'snapshot') {
+    pendingEvents = []
     state.events = (frame.records ?? [])
       .filter((record) => record?.type === 'event')
       .map((record) => record.event)
+    resetTranscriptCache()
     state.telemetry.running = selectedSession.value?.running === true
     return
   }
   if (frame.type === 'event') {
+    // Telemetry folds immediately (it is a handful of counters), but the transcript is appended on the
+    // next frame: a streaming turn emits many events per second and each append used to re-render every
+    // row, which is what made a long Session freeze the tab.
     foldTelemetry(frame.event)
-    state.events.push(frame.event)
+    pendingEvents.push(frame.event)
+    if (pendingFlush === undefined) pendingFlush = window.requestAnimationFrame(flushEvents)
     return
   }
   if (frame.type === 'assistant-stream') {

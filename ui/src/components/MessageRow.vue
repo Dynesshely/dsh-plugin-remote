@@ -6,6 +6,15 @@ import ToolCard from './ToolCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import AppIcon from './AppIcon.vue'
 
+/** Compact number formatting: 1234 → 1.2k. */
+function compact (value) {
+  const number = Number(value ?? 0)
+  if (!Number.isFinite(number)) return '0'
+  if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`
+  if (Math.abs(number) >= 1_000) return `${(number / 1_000).toFixed(1)}k`
+  return String(Math.round(number))
+}
+
 const props = defineProps({
   item: { type: Object, required: true },
   /** True while the run is working on this prompt, which adds the iridescent ring. */
@@ -17,7 +26,6 @@ const showNote = ref(false)
 /** Index of the in-bubble context note that is expanded, or -1. */
 const openNote = ref(-1)
 const groupOpen = ref(false)
-const zoom = ref('')
 
 // Both sides of the conversation render Markdown: what the user typed is Markdown source.
 const html = computed(() => (props.item.kind === 'assistant' || props.item.kind === 'user' ? renderMarkdown(props.item.text) : ''))
@@ -65,7 +73,7 @@ const groupState = computed(() => {
           :key="image.attachmentId"
           type="button"
           class="h-24 w-24 overflow-hidden rounded-xl border border-white/40"
-          @click="zoom = srcOf(image)"
+         
         >
           <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
           <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-blue-50/80">加载中…</span>
@@ -100,6 +108,21 @@ const groupState = computed(() => {
         </span>
       </div>
     </div>
+  </div>
+
+  <!-- One finished turn: what it cost, under the answer it produced. -->
+  <div v-else-if="item.kind === 'turnStats'" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+    <span class="inline-flex items-center gap-1" title="本轮用时">
+      <AppIcon name="clock" :size="11" />{{ item.seconds.toFixed(1) }}s
+    </span>
+    <span class="inline-flex items-center gap-1" title="输出 tokens">
+      <AppIcon name="cpu" :size="11" />{{ compact(item.output) }} tok
+    </span>
+    <span v-if="item.perSecond > 0" class="inline-flex items-center gap-1" title="本轮平均生成速度">
+      ≈{{ item.perSecond.toFixed(1) }} tok/s
+    </span>
+    <span title="输入 tokens（其中缓存读取）">↑{{ compact(item.input) }}<template v-if="item.cache > 0">（缓存 {{ compact(item.cache) }}）</template></span>
+    <span v-if="item.steps > 0" title="步数">{{ item.steps }} 步</span>
   </div>
 
   <!-- Harness-injected context: metadata, so it stays a subdued collapsed note. -->
@@ -150,7 +173,7 @@ const groupState = computed(() => {
         :key="image.attachmentId"
         type="button"
         class="h-32 w-32 overflow-hidden rounded-xl border border-white/60 dark:border-white/10"
-        @click="zoom = srcOf(image)"
+       
       >
         <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
         <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-zinc-400">加载中…</span>
@@ -204,12 +227,5 @@ const groupState = computed(() => {
 
   <!-- image viewer -->
   <Teleport to="body">
-    <div
-      v-if="zoom"
-      class="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
-      @click="zoom = ''"
-    >
-      <img :src="zoom" alt="" class="max-h-full max-w-full rounded-2xl shadow-2xl" />
-    </div>
-  </Teleport>
+      </Teleport>
 </template>

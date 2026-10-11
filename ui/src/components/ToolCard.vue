@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 import { prettyArguments } from '../lib/markdown.js'
 import { codeHtml } from '../lib/highlight.js'
 import AppIcon from './AppIcon.vue'
+import { imageReferencesIn } from '../lib/markdown.js'
+import { proxiedImageSrc } from '../lib/marked-setup.js'
 
 /** One tool call, collapsed to a single summary line until the reader opens it. */
 const props = defineProps({ item: { type: Object, required: true } })
@@ -25,6 +27,8 @@ const resultHtml = computed(() => codeHtml(props.item.result))
 
 const failed = computed(() => props.item.error !== undefined)
 const pending = computed(() => props.item.result === undefined && props.item.error === undefined)
+/** Pictures the tool wrote and named in its output, shown under the text. */
+const resultImages = computed(() => (props.item.result === undefined ? [] : imageReferencesIn(props.item.result).map(proxiedImageSrc)))
 </script>
 
 <template>
@@ -51,6 +55,18 @@ const pending = computed(() => props.item.result === undefined && props.item.err
       <div v-if="item.result !== undefined">
         <div class="mb-1 text-[11px] text-zinc-400">结果</div>
         <pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl bg-white/50 p-2 font-mono text-[12px] dark:bg-black/30" v-html="resultHtml" />
+        <!-- A tool that wrote a screenshot usually just names the file: show it, not only the path. -->
+        <div v-if="resultImages.length > 0" class="mt-2 flex flex-wrap gap-2">
+          <img
+            v-for="source in resultImages"
+            :key="source"
+            :src="source"
+            alt=""
+            loading="lazy"
+            decoding="async"
+            class="max-h-64 rounded-xl border border-white/50 object-contain dark:border-white/10"
+          />
+        </div>
       </div>
       <p v-if="item.error" class="text-[12px] text-rose-500">失败：{{ item.error }}</p>
     </div>

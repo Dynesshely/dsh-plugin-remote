@@ -436,6 +436,86 @@ body {
     margin-bottom: -1px;
     padding-bottom: 1px;
   }
+  /* -------------------------------------------------------------- marquee */
+
+  /*
+   * Hover scroll for a name that does not fit its box.
+   *
+   * The shift and the duration are measured on pointerenter (see ComboBox), so the animation always
+   * stops exactly at the last character and its speed scales with the distance; `alternate` brings the
+   * text back, keeping the start readable.
+   */
+  .rc-marquee {
+    display: inline-block;
+    white-space: nowrap;
+    will-change: transform;
+  }
+  .rc-marquee[data-scroll='true'] {
+    animation: rc-marquee var(--rc-marquee-duration, 1.6s) ease-in-out infinite alternate;
+  }
+  @keyframes rc-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(var(--rc-marquee-shift, 0)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rc-marquee[data-scroll='true'] { animation: none; }
+  }
+  /* -------------------------------------------------------------- transcript cost */
+
+  /*
+   * Inside the transcript the expensive half of the glass is dropped.
+   *
+   * Every message bubble and tool card carries `backdrop-blur`, and a long Session holds hundreds of
+   * them. The renderer then re-blurs all of them on every scroll, and opening DevTools — which forces a
+   * full repaint — can lock the tab up entirely. Translucency alone reads the same over a near-uniform
+   * backdrop, so the blur stays on the chrome (sidebar, header, composer, panels) and leaves the
+   * transcript, where the count is unbounded.
+   */
+  .transcript .card,
+  .transcript .prompt-glass,
+  .transcript .glass,
+  .transcript .glass-soft {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* -------------------------------------------------------------- utilities */
+
+  /*
+   * Scrolling without the bar. The telemetry row is meant to overflow sideways — the metrics keep
+   * coming — but a scrollbar under a one-line strip is chrome nobody asked for, and on Windows it also
+   * steals height from the row.
+   */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+  /* -------------------------------------------------------------- combobox groups */
+
+  /*
+   * Provider headings stick to the top of the model list while its models scroll underneath.
+   *
+   * They need their own fill, because the list is glass and an unfilled heading would let option text
+   * pass behind it. A nested backdrop-filter cannot sample through the already-frosted card, so the
+   * fill is near-opaque per theme rather than blurred, with a soft shadow instead of a hard rule.
+   */
+  .rc-combo-group {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-radius: 0.5rem;
+    background: rgb(255 255 255 / 0.9);
+    box-shadow: 0 8px 16px -14px rgb(15 23 42 / 0.55);
+  }
+  .dark .rc-combo-group {
+    background: rgb(14 18 24 / 0.94);
+    box-shadow: 0 8px 16px -14px rgb(0 0 0 / 0.8);
+  }
   /* -------------------------------------------------------------- controls */
 
   .btn {
@@ -634,4 +714,50 @@ body {
   .drift-hue {
     animation: none !important;
   }
+}
+
+/* -------------------------------------------------------------- usage card */
+
+/*
+ * The usage card sits in the sidebar footer, where the glass needs a little more structure: every tile
+ * and every bar track carries an inner hairline, so the panels read as separate surfaces without adding
+ * another border colour to keep in sync with the theme.
+ */
+.usage-tile {
+  background: rgb(255 255 255 / 0.4);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.65);
+}
+
+.dark .usage-tile {
+  background: rgb(255 255 255 / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+}
+
+.usage-bar {
+  background: rgb(15 23 42 / 0.08);
+  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.06);
+}
+
+.dark .usage-bar {
+  background: rgb(255 255 255 / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+.usage-bar-fill {
+  transition: width 0.3s ease;
+}
+
+/* -------------------------------------------------------------- modal veil */
+
+/*
+ * The browser modal sits over a wall of transcript, so its backdrop blurs harder than the other overlays
+ * and the panel itself goes slightly more transparent — the page stays visible underneath without the
+ * text behind competing with the list.
+ */
+.panel-veil {
+  background: rgb(255 255 255 / 0.72) !important;
+}
+
+.dark .panel-veil {
+  background: rgb(24 24 27 / 0.72) !important;
 }

@@ -39,12 +39,9 @@ const ringTone = computed(() => {
 </script>
 
 <template>
-  <!-- One line, exact toolbar height, horizontally scrollable rather than wrapping. -->
-  <div class="glass-soft flex h-9 items-center gap-x-3 overflow-x-auto rounded-xl px-3 text-[11px] whitespace-nowrap text-zinc-500 dark:text-zinc-400">
-    <span class="flex shrink-0 items-center gap-1.5" :class="telemetry.running ? 'text-emerald-600 dark:text-emerald-400' : ''">
-      <span class="h-1.5 w-1.5 rounded-full" :class="telemetry.running ? 'bg-emerald-500 pulse' : 'bg-zinc-300 dark:bg-zinc-600'" />
-      {{ telemetry.running ? '运行中' : '空闲' }}
-    </span>
+  <!-- One line, exact toolbar height, horizontally scrollable rather than wrapping. The run state
+       itself lives in the conversation header, so this row only carries measurements. -->
+  <div class="glass-soft no-scrollbar flex h-9 items-center gap-x-3 overflow-x-auto rounded-xl px-3 text-[11px] whitespace-nowrap text-zinc-500 dark:text-zinc-400">
 
     <span
       v-if="occupancy !== undefined"
