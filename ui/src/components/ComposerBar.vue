@@ -2,6 +2,8 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { cancelTurn, selectModel, selectPermission, sendPrompt, stageImage, state } from '../lib/store.js'
 import { mobile, reportComposerOverflow } from '../lib/layout.js'
+import { modelIcon, modelMark } from '../lib/model-icons.js'
+import ModelBrowser from './ModelBrowser.vue'
 import ComboBox from './ComboBox.vue'
 // The editor carries CodeMirror, so it loads as its own chunk: the transcript paints first.
 const MarkdownComposer = defineAsyncComponent(() => import('./MarkdownComposer.vue'))
@@ -16,19 +18,20 @@ const area = ref(null)
 const settingsOpen = ref(false)
 const infoOpen = ref(false)
 /** Data URL of the attachment being previewed full screen. */
-const zoom = ref('')
 
 const running = computed(() => state.telemetry.running)
 const canSend = computed(() => !busy.value && state.selected !== undefined && (text.value.trim() !== '' || attachments.value.length > 0))
 
-/** Model options flattened from the provider groups. */
+/** Model options flattened from the provider groups, each tagged with its provider for grouping. */
 const modelItems = computed(() =>
   state.models.groups.flatMap((group) =>
     (group.models ?? []).map((model) => ({
       value: `${group.id}/${model.id}`,
       name: model.name,
-      description: group.name,
-      icon: 'cpu',
+      group: group.name,
+      // Matched by keyword, so a newly configured provider still gets a sensible mark.
+      icon: modelIcon(model.id, model.name),
+      mark: modelMark(model.id, model.name),
     }))))
 
 const currentModel = computed(() => {
@@ -213,6 +216,20 @@ const placeholder = computed(() => {
   if (state.selected === undefined) return '先选择一个会话'
   return mobile.value ? '发消息…' : '发消息…（Enter 换行 / Ctrl+Enter 发送，可直接粘贴图片）'
 })
+/** Whether the full catalogue browser is open. */
+const browserOpen = ref(false)
+
+/**
+ * Choose a model picked in the browser.
+ *
+ * It goes through the picker's own handler rather than a second code path, so the composer, the session
+ * and the store cannot disagree about what is selected.
+ * @param modelId - the model id chosen in the browser.
+ */
+function chooseFromBrowser (modelId) {
+  browserOpen.value = false
+  chooseModel(modelId)
+}
 </script>
 
 <template>
@@ -232,7 +249,7 @@ const placeholder = computed(() => {
           :key="index"
           class="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/60 dark:border-white/10"
         >
-          <button type="button" class="h-full w-full" title="预览" @click="zoom = attachment.preview">
+          <button type="button" class="h-full w-full" title="预览" data-zoom="1">
             <img :src="attachment.preview" :alt="attachment.name" class="h-full w-full object-cover" />
           </button>
           <button
@@ -270,11 +287,16 @@ const placeholder = computed(() => {
             class="shrink-0"
             :model-value="currentModel"
             :items="modelItems"
+        all-label="查看所有模型"
+        list-height="min(50vw, 80dvh)"
+        @view-all="browserOpen = true"
             icon="cpu"
             placeholder="模型"
             placement="up"
             align="right"
-            width="max-w-[18rem]"
+            width="max-w-[22rem]"
+            :min-list-width="340"
+            searchable
             :disabled="state.selected === undefined"
             @update:model-value="chooseModel"
           />
@@ -336,14 +358,7 @@ const placeholder = computed(() => {
 
     <!-- Staged attachment viewer -->
     <Teleport to="body">
-      <div
-        v-if="zoom"
-        class="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md"
-        @click="zoom = ''"
-      >
-        <img :src="zoom" alt="" class="max-h-full max-w-full rounded-2xl shadow-2xl" />
-      </div>
-    </Teleport>
+          </Teleport>
 
     <!-- Settings sheet: the narrow-screen home of the model and permission pickers. -->
     <Teleport to="body">
@@ -436,4 +451,11 @@ const placeholder = computed(() => {
       </div>
     </Teleport>
   </div>
+  <ModelBrowser
+    v-if="browserOpen"
+    :groups="state.modelGroups ?? []"
+    :model="state.selectedModel ?? ''"
+    @close="browserOpen = false"
+    @select="chooseFromBrowser"
+  />
 </template>
