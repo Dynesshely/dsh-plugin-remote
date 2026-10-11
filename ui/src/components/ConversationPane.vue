@@ -10,6 +10,121 @@ import PendingPanel from './PendingPanel.vue'
 import PromptRail from './PromptRail.vue'
 import ComboBox from './ComboBox.vue'
 import AppIcon from './AppIcon.vue'
+import GLightbox from 'glightbox'
+import 'glightbox/dist/css/glightbox.min.css'
+
+/**
+ * Click any picture in the transcript to enlarge it.
+ *
+ * Delegated from the document rather than bound per image: pictures arrive with every streaming message,
+ * and a listener per element would have to be re-attached on each of them. Guarded by a window flag so a
+ * remount cannot stack duplicates.
+ */
+if (typeof window !== 'undefined' && window.__rcFancyboxBound !== true) {
+  window.__rcFancyboxBound = true
+  document.addEventListener('click', (event) => {
+    const target = event.target
+    // `.transcript` covers the conversation; `[data-zoom]` covers the composer's staged attachments, which
+    // sit outside it. Anything else — the brand mark, icons — is left alone.
+    if (!(target instanceof HTMLImageElement) || target.closest('.transcript, [data-zoom]') === null) return
+    event.preventDefault()
+    // One instance per open, destroyed on close: pictures arrive continuously and an instance held open
+    // would keep a stale element list.
+    const box = GLightbox({
+      elements: [{ href: target.currentSrc === '' ? target.src : target.currentSrc, type: 'image', title: target.alt }],
+    })
+    box.on('close', () => box.destroy())
+    box.open()
+  })
+}
+
+/** Settings sheet: a centred modal opened from the header. */
+const settingsOpen = ref(false)
+/** Dense transcript, remembered locally because it is a reading preference, not Host state. */
+const dense = ref(window.localStorage.getItem('rc.dense') === '1')
+
+watch(dense, (value) => {
+  try {
+    window.localStorage.setItem('rc.dense', value ? '1' : '0')
+  } catch {
+    /* a blocked storage keeps the in-memory value */
+  }
+})
+
+/** Usage configuration being edited, loaded when the sheet opens. */
+const usageDraft = ref([])
+/** The aggregated gateway source, edited alongside the direct providers. */
+const usageGateway = ref({ url: '', enabled: true, hasKey: false, hint: '', resolvedFrom: '', resolvedHint: '', key: '' })
+const usageSaving = ref(false)
+const usageSaved = ref('')
+
+/** Load the usage providers, which arrive with keys reduced to a hint. */
+async function loadUsageConfig () {
+  try {
+    const payload = await api('/api/usage/config')
+    usageGateway.value = {
+      url: String(payload.gateway?.url ?? ''),
+      enabled: payload.gateway?.enabled !== false,
+      hasKey: payload.gateway?.hasKey === true,
+      hint: String(payload.gateway?.hint ?? ''),
+      resolvedFrom: String(payload.gateway?.resolvedFrom ?? ''),
+      resolvedHint: String(payload.gateway?.resolvedHint ?? ''),
+      key: '',
+    }
+    usageDraft.value = (payload.providers ?? []).map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      kind: provider.kind,
+      url: provider.url,
+      enabled: provider.enabled === true,
+      hasKey: provider.hasKey === true,
+      hint: provider.hint ?? '',
+      key: '',
+    }))
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  }
+}
+
+/** Save the usage providers. A blank key field keeps whatever the Host already stores. */
+async function saveUsageConfig () {
+  usageSaving.value = true
+  usageSaved.value = ''
+  try {
+    await api('/api/usage/config', {
+      method: 'POST',
+      body: {
+        gateway: {
+          url: usageGateway.value.url,
+          enabled: usageGateway.value.enabled,
+          // Omitted when untouched, which is what "keep the stored key" means.
+          ...(usageGateway.value.key === '' ? {} : { key: usageGateway.value.key }),
+        },
+        providers: usageDraft.value.map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          url: provider.url,
+          enabled: provider.enabled,
+          // Omitted entirely when untouched, which is what "keep the stored key" means.
+          ...(provider.key === '' ? {} : { key: provider.key }),
+        })),
+      },
+    })
+    usageSaved.value = '已保存'
+    await loadUsageConfig()
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  } finally {
+    usageSaving.value = false
+  }
+}
+
+watch(settingsOpen, (open) => {
+  if (open) {
+    usageSaved.value = ''
+    void loadUsageConfig()
+  }
+})
 
 const props = defineProps({ theme: { type: String, default: 'system' } })
 const emit = defineEmits(['toggleSidebar', 'update:theme'])
@@ -151,10 +266,19 @@ onBeforeUnmount(() => {
       <button class="icon-btn" type="button" title="展开/收起侧栏" @click="emit('toggleSidebar')">
         <AppIcon name="menu" :size="16" />
       </button>
+      <!-- Run state lives here: the dot was already in this header, so the status strip below the
+           composer no longer repeats it — it only gains the word while a turn is actually running. -->
       <span
-        class="h-2 w-2 shrink-0 rounded-full"
-        :class="state.telemetry.running ? 'bg-emerald-500 pulse' : 'bg-zinc-300 dark:bg-zinc-600'"
-      />
+        class="flex shrink-0 items-center gap-1.5"
+        :class="state.telemetry.running ? 'text-emerald-600 dark:text-emerald-400' : ''"
+        :title="state.telemetry.running ? '正在运行' : '空闲'"
+      >
+        <span
+          class="h-2 w-2 shrink-0 rounded-full"
+          :class="state.telemetry.running ? 'bg-emerald-500 pulse' : 'bg-zinc-300 dark:bg-zinc-600'"
+        />
+        <span v-if="state.telemetry.running" class="text-[11px] font-medium">运行中</span>
+      </span>
       <h1 class="min-w-0 flex-1 truncate text-sm font-medium">
         {{ selectedSession?.title ?? '未选择会话' }}
       </h1>
@@ -167,10 +291,123 @@ onBeforeUnmount(() => {
         :label-class="mobile ? 'hidden' : ''"
         @update:model-value="emit('update:theme', $event)"
       />
+      <button class="icon-btn" type="button" title="设置" @click="settingsOpen = true">
+        <AppIcon name="gear" :size="15" />
+      </button>
       <button class="icon-btn" type="button" title="刷新会话列表" @click="loadState()">
         <AppIcon name="refresh" :size="15" />
       </button>
     </header>
+
+    <!-- Settings: a centred modal, teleported so no ancestor can clip it. -->
+    <Teleport to="body">
+      <div
+        v-if="settingsOpen"
+        class="fixed inset-0 z-[126] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+        @click.self="settingsOpen = false"
+      >
+        <div class="panel pop max-h-[80dvh] w-full max-w-md overflow-y-auto p-4">
+          <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-sm font-medium">设置</h2>
+            <button class="icon-btn h-7 w-7" type="button" title="关闭" @click="settingsOpen = false">
+              <AppIcon name="close" :size="13" />
+            </button>
+          </div>
+
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">外观</p>
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <span class="text-[13px]">主题</span>
+            <ComboBox
+              :model-value="theme"
+              :items="THEMES"
+              icon="monitor"
+              align="right"
+              width="max-w-[9rem]"
+              @update:model-value="emit('update:theme', $event)"
+            />
+          </div>
+          <label class="mb-3 flex items-center justify-between gap-3 text-[13px]">
+            <span>紧凑消息间距</span>
+            <input v-model="dense" type="checkbox" class="h-3.5 w-3.5" />
+          </label>
+
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">连接</p>
+          <dl class="mb-3 space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
+            <div class="flex justify-between gap-3">
+              <dt>监听</dt>
+              <dd class="truncate">{{ state.bind || '—' }}</dd>
+            </div>
+            <div class="flex justify-between gap-3">
+              <dt>流状态</dt>
+              <dd>{{ state.streamError ? state.streamError : '已连接' }}</dd>
+            </div>
+            <div class="flex justify-between gap-3">
+              <dt>会话</dt>
+              <dd class="truncate">{{ state.selected ?? '—' }}</dd>
+            </div>
+          </dl>
+
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">用量与余额</p>
+          <p class="mb-2 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            由宿主代为请求（浏览器受同源策略限制），密钥只存在宿主侧（<code class="font-mono">~/.dsh/remote-control/usage.json</code>，权限 0600），页面只会看到掩码。
+          </p>
+          <div class="mb-2 rounded-xl border border-sky-300/50 bg-sky-50/40 p-2 dark:border-sky-400/20 dark:bg-sky-500/[0.06]">
+            <div class="mb-1.5 flex items-center gap-2">
+              <input v-model="usageGateway.enabled" type="checkbox" class="h-3.5 w-3.5" />
+              <span class="text-[13px]">网关聚合（推荐）</span>
+              <span class="ml-auto text-[10px] text-zinc-400">
+                {{ usageGateway.resolvedFrom === 'dsh' ? '密钥取自 DSH 凭据 ' + usageGateway.resolvedHint
+                  : usageGateway.resolvedFrom === 'config' ? '密钥来自此处设置'
+                    : '未找到密钥' }}
+              </span>
+            </div>
+            <input v-model="usageGateway.url" class="field mb-1.5 py-1 text-[12px]" placeholder="聚合用量接口地址" />
+            <input
+              v-model="usageGateway.key"
+              type="password"
+              class="field py-1 text-[12px]"
+              placeholder="留空则使用 DSH 中 PORTARA_AI_GATEWAY_API_KEY"
+            />
+            <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+              网关会代查各家余额与用量，并把它代理过的模型的实际用量一并汇总，因此这里只需一个地址。
+            </p>
+          </div>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">直连（网关关闭时使用）</p>
+          <div v-for="provider in usageDraft" :key="provider.id" class="mb-2 rounded-xl border border-white/50 p-2 dark:border-white/10">
+            <div class="mb-1.5 flex items-center gap-2">
+              <input v-model="provider.enabled" type="checkbox" class="h-3.5 w-3.5" />
+              <span class="text-[13px]">{{ provider.label }}</span>
+              <span class="ml-auto text-[10px] text-zinc-400">
+                {{ provider.hasKey ? `已存密钥 ${provider.hint}` : '未设置密钥' }}
+              </span>
+            </div>
+            <input v-model="provider.url" class="field mb-1.5 py-1 text-[12px]" placeholder="用量接口地址，例如 https://…/user/balance" />
+            <input
+              v-model="provider.key"
+              type="password"
+              class="field py-1 text-[12px]"
+              :placeholder="provider.hasKey ? '留空则保持现有密钥' : 'API Key'"
+            />
+          </div>
+          <div class="mb-3 flex items-center gap-2">
+            <button class="btn" type="button" :disabled="usageSaving" @click="saveUsageConfig">
+              {{ usageSaving ? '保存中…' : '保存用量设置' }}
+            </button>
+            <span v-if="usageSaved !== ''" class="text-[11px] text-emerald-600 dark:text-emerald-400">{{ usageSaved }}</span>
+          </div>
+
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">DSH</p>
+          <p class="mb-3 text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            重启与退出在左侧 DSH 菜单里（点击侧栏顶部的图标）。它们由一个独立进程完成，因为退出会连同本页面所依赖的宿主一起结束。
+          </p>
+
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">关于</p>
+          <p class="text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            远程遥控插件 v1.0.0 · 页面与宿主同源、由令牌保护。更多设置项待定，这里先放上已经可用的部分。
+          </p>
+        </div>
+      </div>
+    </Teleport>
 
     <p
       v-if="state.streamError"
@@ -186,7 +423,8 @@ onBeforeUnmount(() => {
         :class="mobile ? 'px-3' : 'pl-3 pr-8'"
         @scroll="onScroll"
       >
-        <div class="mx-auto flex max-w-3xl flex-col gap-4">
+        <div class="transcript mx-auto flex max-w-3xl flex-col"
+      :class="dense ? 'gap-2' : 'gap-4'">
           <!-- The opening window is bounded, so a long Session pages backwards from here. -->
           <div v-if="state.hasOlder && transcriptItems.length > 0" class="flex justify-center">
             <button class="chip" type="button" :disabled="state.loadingOlder" @click="loadEarlier">

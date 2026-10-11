@@ -13,6 +13,8 @@ import {
   state,
 } from '../lib/store.js'
 import { mobile } from '../lib/layout.js'
+import { api } from '../lib/api.js'
+import UsageCard from './UsageCard.vue'
 import { Pin } from 'lucide-vue-next'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
@@ -210,6 +212,63 @@ async function commitDialog () {
   await setArchived(current.session.id, current.archived, current.stopActivity === true)
 }
 
+/* ---------------------------------------------------------------- DSH menu */
+
+/** Whether the logo menu is open. */
+const dshOpen = ref(false)
+/** Which destructive action is waiting for a second click, so neither fires by accident. */
+const armed = ref('')
+const dshBusy = ref('')
+/** Facts about this Host, fetched when the menu opens. */
+const info = ref(undefined)
+
+/** @returns the remote-control port the Host should watch while it closes. */
+function controlPort () {
+  const port = Number(window.location.port)
+  return Number.isFinite(port) && port > 0 ? port : 19400
+}
+
+/** Load the Host facts shown in the About section. */
+async function loadInfo () {
+  try {
+    info.value = await api('/api/dsh/info')
+  } catch (error) {
+    info.value = { error: String(error.message ?? error) }
+  }
+}
+
+async function openDsh () {
+  dshOpen.value = !dshOpen.value
+  armed.value = ''
+  if (dshOpen.value) await loadInfo()
+}
+
+/**
+ * Restart or quit DSH.
+ *
+ * Both go through the Host, which spawns a detached helper: quitting takes the Host — and this page's
+ * only backend — down with it, so the process that starts it again has to live outside.
+ * @param mode - `restart` or `exit`.
+ */
+async function controlDsh (mode) {
+  if (armed.value !== mode) {
+    armed.value = mode
+    return
+  }
+  armed.value = ''
+  dshBusy.value = mode
+  try {
+    await api(`/api/dsh/${mode}`, { method: 'POST', body: { port: controlPort() } })
+    state.actionError = mode === 'restart'
+      ? 'DSH 正在重启，页面会在它回来后自动重连'
+      : 'DSH 正在退出，本页面将失去连接'
+  } catch (error) {
+    state.actionError = String(error.message ?? error)
+  } finally {
+    dshBusy.value = ''
+  }
+}
+
 /** @returns the menu entries for one Session. */
 function entriesFor (session) {
   const archived = state.archivedSessionIds.includes(session.id)
@@ -228,9 +287,16 @@ function entriesFor (session) {
       <!-- Brand tile: a rounded rectangle whose 10px radius reads as the sidebar's own 18px corner
            at this size. The source icon ships its own rounded-square backdrop, so the image is
            scaled up inside the clipped tile to cut that backdrop away. -->
-      <span class="brand-tile h-8 w-8">
+      <!-- The mark doubles as the DSH menu: restart, quit, and what this Host actually is. -->
+      <button
+        type="button"
+        class="brand-tile h-8 w-8 transition-transform duration-200 hover:scale-105 active:scale-95"
+        :class="dshOpen ? 'ring-2 ring-blue-400/60' : ''"
+        title="DSH 菜单"
+        @click="openDsh"
+      >
         <img src="/app-icon.png" alt="" class="h-full w-full scale-125 object-cover" />
-      </span>
+      </button>
       <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-wide">DSH REMOTE</span>
       <span
         class="h-2 w-2 shrink-0 rounded-full"
@@ -375,13 +441,51 @@ function entriesFor (session) {
       </p>
     </div>
 
-    <div class="border-t border-white/50 px-3 py-2 dark:border-white/10">
-      <p class="flex items-center gap-1.5 truncate text-[10px] text-zinc-400">
-        <AppIcon name="shield" :size="11" />
-        监听 {{ state.bind || '—' }}
-        <span v-if="state.managed === false" class="ml-auto shrink-0 opacity-70">管理不可用</span>
-      </p>
-    </div>
+    <!-- Balance and usage took the footer over: the listening address now lives in the DSH menu and
+         the settings sheet, where it belongs next to the rest of the connection facts. -->
+    <!-- The card carries its own glass and margin, so the footer needs no rule of its own. -->
+    <UsageCard />
+
+    <!-- DSH menu: a glass card in the top-left corner, teleported so nothing clips it. -->
+    <Teleport to="body">
+      <div v-if="dshOpen" class="fixed inset-0 z-[124]" @click="dshOpen = false" />
+      <div v-if="dshOpen" class="card pop fixed top-3 left-3 z-[125] w-64 overflow-hidden p-1.5">
+        <p class="px-2.5 pt-1.5 pb-2 text-[11px] font-medium tracking-wide text-zinc-400">DSH</p>
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/60 dark:hover:bg-white/[0.08]"
+          :disabled="dshBusy !== ''"
+          @click="controlDsh('restart')"
+        >
+          <AppIcon name="restart" :size="14" class="opacity-70" />
+          <span class="flex-1">{{ armed === 'restart' ? '再次点击确认重启' : '重启 DSH' }}</span>
+        </button>
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-rose-500 transition-colors hover:bg-rose-500/10"
+          :disabled="dshBusy !== ''"
+          @click="controlDsh('exit')"
+        >
+          <AppIcon name="power" :size="14" class="opacity-80" />
+          <span class="flex-1">{{ armed === 'exit' ? '再次点击确认退出' : '退出 DSH' }}</span>
+        </button>
+        <div class="mx-2 my-1.5 border-t border-white/50 dark:border-white/10" />
+        <div class="px-2.5 py-1.5 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <p class="mb-1 font-medium text-zinc-400">关于</p>
+          <p>远程遥控插件 · v1.0.0</p>
+          <p>监听 {{ state.bind || '—' }}</p>
+          <template v-if="info !== undefined">
+            <p v-if="info.error" class="text-rose-500">读取失败：{{ info.error }}</p>
+            <template v-else>
+              <p>DSH pid {{ info.pid }} · node {{ info.node }}<span v-if="info.electron"> · electron {{ info.electron }}</span></p>
+              <p class="break-all">启动器 {{ info.launcher }}</p>
+              <p v-if="info.launcherExists === false" class="text-rose-500">启动器不存在，重启会失败</p>
+            </template>
+          </template>
+          <p v-else class="opacity-60">正在读取…</p>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Action menu: teleported so the scrolling list cannot clip it. -->
     <Teleport to="body">

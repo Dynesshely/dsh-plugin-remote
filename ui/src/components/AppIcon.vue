@@ -32,6 +32,18 @@ const PATHS = {
   pin: ['M12 4.2a3.6 3.6 0 0 0-3.6 3.6c0 2.4 3.6 7.4 3.6 7.4s3.6-5 3.6-7.4A3.6 3.6 0 0 0 12 4.2z', 'M12 15.2V20'],
   fork: ['M7 3.6v9.4', 'M7 9h6a4 4 0 0 1 4 4v1.4', 'M7 3.6a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8z', 'M17 14.6a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8z', 'M7 16.6a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8z'],
   more: ['M7 12h.4', 'M12 12h.4', 'M17 12h.4'],
+  power: ['M12 4v7', 'M7.5 6.6a7 7 0 1 0 9 0'],
+  restart: ['M20 12a8 8 0 1 1-2.3-5.6', 'M20 4v4h-4'],
+  // Model families. Abstract marks rather than the real logos: recognisable by shape, and nobody's
+  // trademark ends up in an open-source repository.
+  modelOpenai: ['M12 4.5a7.5 7.5 0 1 1-6.4 3.6', 'M12 8.4a3.6 3.6 0 1 1-3.1 1.8'],
+  modelAnthropic: ['M6.5 19l5.5-13 5.5 13', 'M9.2 14.2h5.6'],
+  modelGoogle: ['M12 3.6l2.1 6.3 6.3 2.1-6.3 2.1L12 20.4l-2.1-6.3L3.6 12l6.3-2.1z'],
+  modelMeta: ['M4 15.4c1.6-6 4.6-9 8-9s6.4 3 8 9', 'M8 15.4h8'],
+  modelDeepseek: ['M3.6 13.4c3-6 6.4-8 8.4-8s5.4 2 8.4 8', 'M9 16.6c1.6 1.5 4.4 1.5 6 0'],
+  modelQwen: ['M12 3.6l7 3.9v8.9l-7 3.9-7-3.9V7.5z', 'M12 8.6v6.8'],
+  modelGrok: ['M5 5l14 14', 'M19 5L5 19'],
+  modelMistral: ['M4 18l4-10 4 6 4-6 4 10'],
   plus: ['M12 5v14', 'M5 12h14'],
 }
 
