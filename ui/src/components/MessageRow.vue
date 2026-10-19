@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
+import { useLazyRender } from '../lib/lazy-render.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { attachmentImage, ensureAttachmentImage, state } from '../lib/store.js'
 import ToolCard from './ToolCard.vue'
@@ -21,14 +22,21 @@ const props = defineProps({
   active: { type: Boolean, default: false },
 })
 
+/** Observed so the expensive markdown work happens only near the viewport. */
+const root = ref(null)
+const { rendered } = useLazyRender(root)
+
 const showReasoning = ref(false)
 const showNote = ref(false)
 /** Index of the in-bubble context note that is expanded, or -1. */
 const openNote = ref(-1)
 const groupOpen = ref(false)
 
-// Both sides of the conversation render Markdown: what the user typed is Markdown source.
-const html = computed(() => (props.item.kind === 'assistant' || props.item.kind === 'user' ? renderMarkdown(props.item.text) : ''))
+// Both sides of the conversation render Markdown: what the user typed is Markdown source. Gated on
+// `rendered`: off-screen rows show their text as-is, which costs nothing and still reads.
+const html = computed(() => (rendered.value && (props.item.kind === 'assistant' || props.item.kind === 'user')
+  ? renderMarkdown(props.item.text)
+  : ''))
 const reasoning = computed(() => String(props.item.reasoning ?? '').trim())
 /** The reasoning chain renders as markdown too, computed only while it is open. */
 const reasoningHtml = computed(() => (showReasoning.value ? renderMarkdown(reasoning.value) : ''))
@@ -61,6 +69,8 @@ const groupState = computed(() => {
 </script>
 
 <template>
+  <!-- The wrapper is what the observer watches; the row's own layout stays inside it. -->
+  <div ref="root" class="flex flex-col">
   <!-- user -->
   <div v-if="item.kind === 'user'" class="rise flex justify-end">
     <div
@@ -79,7 +89,8 @@ const groupState = computed(() => {
           <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-blue-50/80">加载中…</span>
         </button>
       </div>
-      <div v-if="item.text" class="md" v-html="html" />
+      <div v-if="item.text && rendered" class="md" v-html="html" />
+      <div v-else-if="item.text" class="md md-plain">{{ item.text }}</div>
       <div v-if="item.files?.length" class="mt-1 flex flex-wrap gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
         <span v-for="file in item.files" :key="file">{{ file }}</span>
       </div>
@@ -166,7 +177,8 @@ const groupState = computed(() => {
         <div class="md break-words text-[13px] text-zinc-500 dark:text-zinc-400" v-html="reasoningHtml" />
       </div>
     </div>
-    <div class="md break-words" v-html="html" />
+    <div v-if="rendered" class="md break-words" v-html="html" />
+          <div v-else class="md md-plain break-words">{{ item.text }}</div>
     <div v-if="images.length" class="mt-2 flex flex-wrap gap-2">
       <button
         v-for="image in images"
@@ -225,7 +237,5 @@ const groupState = computed(() => {
     <span class="chip text-[11px]">{{ item.text }}</span>
   </div>
 
-  <!-- image viewer -->
-  <Teleport to="body">
-      </Teleport>
+  </div>
 </template>

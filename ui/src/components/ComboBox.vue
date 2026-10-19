@@ -207,11 +207,11 @@ function stopScroll (event) {
 
 onMounted(() => {
   document.addEventListener('pointerdown', onPointerDown, true)
-  window.addEventListener('resize', updatePosition)
-  window.addEventListener('scroll', updatePosition, true)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updatePosition)
+  window.removeEventListener('scroll', updatePosition, true)
   document.removeEventListener('pointerdown', onPointerDown, true)
   window.removeEventListener('resize', updatePosition)
   window.removeEventListener('scroll', updatePosition, true)
@@ -219,6 +219,23 @@ onBeforeUnmount(() => {
 
 watch(() => props.disabled, (value) => {
   if (value) open.value = false
+})
+
+/**
+ * Reposition listeners live only while the panel is open.
+ *
+ * A closed picker has nothing to reposition, and there are several of them on the page: keeping a
+ * capture-phase scroll listener on the window per instance meant every scroll event called every one of
+ * them. The outside-click listener stays, because that is what closes the panel.
+ */
+watch(open, (value) => {
+  if (value) {
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+  } else {
+    window.removeEventListener('resize', updatePosition)
+    window.removeEventListener('scroll', updatePosition, true)
+  }
 })
 </script>
 

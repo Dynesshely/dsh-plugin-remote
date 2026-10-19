@@ -479,7 +479,33 @@ body {
     -webkit-backdrop-filter: none !important;
   }
 
-  /* -------------------------------------------------------------- utilities */
+  /* -------------------------------------------------------------- transcript rows */
+
+/*
+ * Every row is its own paint and layout island, so a change inside one cannot dirty the rest of the
+ * transcript.
+ *
+ * Deliberately `contain` and not `content-visibility: auto`: the prompt rail measures rows directly
+ * (PromptRail.vue reads getBoundingClientRect / offsetTop / clientHeight), and skipping their layout
+ * would make every off-screen tick point at the wrong place. Containment keeps the measurements honest.
+ */
+.transcript > * {
+  contain: layout paint style;
+}
+
+/* The loading placeholder is decoration: honour a reader who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .rc-skeleton {
+    animation: none;
+  }
+}
+
+/* Text shown while a row is outside the render band: unformatted, but never blank. */
+.md-plain {
+  white-space: pre-wrap;
+}
+
+/* -------------------------------------------------------------- utilities */
 
   /*
    * Scrolling without the bar. The telemetry row is meant to overflow sideways — the metrics keep
