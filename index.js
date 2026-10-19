@@ -89,6 +89,16 @@ const LOGIN_WINDOW_MS = 60_000
  * with a small window a long Session opened on its last few turns only.
  */
 const FOLLOW_WINDOW = Object.freeze({ maxMessages: 500, turnWindow: { minMessages: 320, minTurns: 20 } })
+/**
+ * Records per SSE snapshot frame.
+ *
+ * The window the Host asks for is bounded in *messages*, but a Session's log also carries every step,
+ * tool call and job event — so a long, tool-heavy Session came back as a single five-megabyte frame. That
+ * is one very large parse for the browser to do in one go, and a single point of failure for the whole
+ * transcript. Splitting it means each chunk folds as it lands, the first content paints sooner, and no
+ * single event grows without limit.
+ */
+const SNAPSHOT_CHUNK = 300
 /** One backward page for "load earlier": smaller, so paging stays responsive. */
 const OLDER_WINDOW = Object.freeze({ maxMessages: 200, turnWindow: { minMessages: 150, minTurns: 10 } })
 /** Attachment media types this plugin is willing to stage. */
@@ -511,7 +521,7 @@ const IMAGE_TYPE_BY_EXTENSION = {
 /** How long the image proxy waits for an upstream picture before giving up. */
 const IMAGE_TIMEOUT_MS = 20_000
 /** Largest picture the proxy will hand back, so one screenshot cannot exhaust the page. */
-const MAX_IMAGE_BYTES = 12 * 1024 * 1024
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 /** A record this old has certainly been decided; it is dropped rather than shown forever. */
   const APPROVAL_TTL_MS = 30 * 60 * 1000
@@ -583,6 +593,20 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024
       }, controller.signal)
       for await (const frame of stream) {
         if (client.closed || client.sessionAbort !== controller) return
+        if (frame?.type === 'snapshot' && Array.isArray(frame.records) && frame.records.length > SNAPSHOT_CHUNK) {
+          // Chunked: the page folds each piece as it lands, so no single SSE event grows without limit and
+          // the first content paints sooner.
+          const records = frame.records
+          for (let at = 0; at < records.length; at += SNAPSHOT_CHUNK) {
+            if (client.closed || client.sessionAbort !== controller) return
+            const chunk = records.slice(at, at + SNAPSHOT_CHUNK)
+            const last = at + SNAPSHOT_CHUNK >= records.length
+            writeEvent(client, 'frame', at === 0
+              ? { type: 'snapshot', records: chunk, last }
+              : { type: 'snapshot-append', records: chunk, last })
+          }
+          continue
+        }
         writeEvent(client, 'frame', frame)
       }
     } catch (error) {
@@ -1017,12 +1041,14 @@ const MAX_IMAGE_BYTES = 12 * 1024 * 1024
         return
       }
       try {
+        // The signal is required: without it the controller dereferences it while checking for
+        // cancellation, which is what made every "load earlier" fail with a TypeError.
         const page = await ctx.sessionController.page({
           address: { kind: 'session', sessionId },
           throughSeq: beforeSeq,
           beforeSeq,
           ...OLDER_WINDOW,
-        })
+        }, AbortSignal.timeout(30_000))
         const records = Array.isArray(page?.records) ? page.records : []
         json(200, { records, hasMore: page?.hasMore === true && records.length > 0 })
       } catch (error) {
