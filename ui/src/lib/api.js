@@ -68,7 +68,13 @@ export async function consumeLinkToken () {
 export function openStream (sessionId, handlers) {
   const source = new EventSource(`/api/stream?sessionId=${encodeURIComponent(sessionId)}`)
   source.addEventListener('frame', (event) => {
-    handlers.onFrame?.(JSON.parse(event.data))
+    try {
+      handlers.onFrame?.(JSON.parse(event.data))
+    } catch (error) {
+      // A frame that cannot be read has to be said out loud: keeping the previous transcript in silence is
+      // exactly how a Session ends up looking empty.
+      handlers.onError?.('数据帧解析失败（' + String(event.data.length) + ' 字节）：' + String(error?.message ?? error))
+    }
   })
   source.addEventListener('pending', (event) => {
     handlers.onPending?.(JSON.parse(event.data))

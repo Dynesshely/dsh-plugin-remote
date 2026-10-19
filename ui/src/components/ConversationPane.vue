@@ -11,6 +11,7 @@ import PromptRail from './PromptRail.vue'
 import ComboBox from './ComboBox.vue'
 import AppIcon from './AppIcon.vue'
 import GLightbox from 'glightbox'
+import { setScrollRoot } from '../lib/lazy-render.js'
 import 'glightbox/dist/css/glightbox.min.css'
 
 /**
@@ -130,6 +131,10 @@ const props = defineProps({ theme: { type: String, default: 'system' } })
 const emit = defineEmits(['toggleSidebar', 'update:theme'])
 
 const scroller = ref(null)
+
+// The transcript rows correct the scroll offset for their own height changes, so they need to know what
+// scrolls them.
+watch(scroller, (element) => setScrollRoot(element), { immediate: true })
 const sticky = ref(true)
 const showLiveReasoning = ref(false)
 /** Index of the prompt currently being read, for the rail's active tick. */
@@ -162,14 +167,37 @@ function itemElement (key) {
   return node.querySelector(`[data-item-key="${CSS.escape(key)}"]`)
 }
 
+let syncFrame
+
+/**
+ * Recompute which prompt is being read, at most once per frame.
+ *
+ * This walks every prompt, so running it per scroll event means several DOM queries and a forced layout
+ * for each one — which is what made scrolling stutter. One run per frame is indistinguishable to the
+ * reader and costs a fraction as much.
+ */
+function schedulePromptSync () {
+  if (syncFrame !== undefined) return
+  syncFrame = window.requestAnimationFrame(() => {
+    syncFrame = undefined
+    syncActivePrompt()
+  })
+}
+
 /** Recompute which prompt is being read. */
 function syncActivePrompt () {
   const node = scroller.value
   if (node === null) return
   const box = node.getBoundingClientRect()
+  // One pass over the document instead of one query per prompt: the queries were the expensive half.
+  const elements = new Map()
+  for (const element of node.querySelectorAll('[data-item-key]')) {
+    const key = element.dataset.itemKey
+    if (key !== undefined) elements.set(key, element)
+  }
   const tops = prompts.value.map((tick) => {
-    const element = itemElement(tick.key)
-    if (element === null) return Number.POSITIVE_INFINITY
+    const element = elements.get(tick.key)
+    if (element === undefined) return Number.POSITIVE_INFINITY
     return element.getBoundingClientRect().top - box.top + node.scrollTop
   })
   // The last prompt is the one being read once the transcript is scrolled to its end.
@@ -204,7 +232,7 @@ function onScroll () {
   const node = scroller.value
   if (node === null) return
   sticky.value = node.scrollHeight - node.scrollTop - node.clientHeight < 60
-  syncActivePrompt()
+  schedulePromptSync()
 }
 
 watch([() => transcriptItems.value.length, () => state.selected], async () => {
@@ -436,7 +464,42 @@ onBeforeUnmount(() => {
               <span>{{ state.loadingOlder ? '加载中…' : '加载更早的消息' }}</span>
             </button>
           </div>
-          <p v-if="transcriptItems.length === 0 && !state.live.text" class="py-16 text-center text-sm text-zinc-400">
+          <!-- Loading a Session looks like the shape of what is coming, rather than claiming the Session
+               is empty while it is still being read. -->
+          <div
+            v-if="state.sessionLoading && transcriptItems.length === 0"
+            class="flex flex-col gap-4"
+            aria-busy="true"
+            aria-live="polite"
+          >
+            <p class="flex items-center gap-2 text-[12px] text-zinc-400">
+              <AppIcon name="refresh" :size="12" class="animate-spin" />
+              <span>正在载入会话…</span>
+            </p>
+            <div class="card rc-skeleton animate-pulse space-y-2 p-3">
+              <div class="h-2.5 w-2/3 rounded-full bg-black/10 dark:bg-white/10" />
+              <div class="h-2.5 w-5/6 rounded-full bg-black/10 dark:bg-white/10" />
+              <div class="h-2.5 w-1/3 rounded-full bg-black/10 dark:bg-white/10" />
+            </div>
+            <div class="flex justify-end">
+              <div class="prompt-glass rc-skeleton animate-pulse w-1/2 space-y-2 px-4 py-2.5">
+                <div class="h-2.5 w-3/4 rounded-full bg-black/10 dark:bg-white/10" />
+                <div class="h-2.5 w-1/2 rounded-full bg-black/10 dark:bg-white/10" />
+              </div>
+            </div>
+          </div>
+          <!-- Events that fold into nothing is a different situation from an empty Session, and saying
+               which one it is saves a lot of guessing. -->
+          <p
+            v-else-if="transcriptItems.length === 0 && state.events.length > 0 && !state.live.text"
+            class="px-6 py-16 text-center text-sm text-amber-600 dark:text-amber-300"
+          >
+            已载入 {{ state.events.length }} 条事件，但没有可显示的内容（可能是解析异常）。
+          </p>
+          <p
+            v-else-if="transcriptItems.length === 0 && !state.live.text"
+            class="py-16 text-center text-sm text-zinc-400"
+          >
             {{ state.selected === undefined ? '从左侧选择一个会话' : '这个会话还没有消息' }}
           </p>
           <div v-for="item in transcriptItems" :key="item.key" :data-item-key="item.key">

@@ -4,6 +4,8 @@ import { parseQuestionArgs, parseQuestionResult } from './questions.js'
 
 /** Everything the shell renders; Session events are folded into `events` and `telemetry` here. */
 export const state = reactive({
+  /** Fingerprint of the Session list, so an unchanged catalog is not re-applied. */
+  sessionFingerprint: '',
   booted: false,
   unauthorized: false,
   bootError: '',
@@ -20,6 +22,8 @@ export const state = reactive({
   /** Per-Session telemetry snapshots the Host keeps, keyed by Session id. */
   telemetryBySession: {},
   selected: undefined,
+  /** True from switching to a Session until its first snapshot arrives. */
+  sessionLoading: false,
   pending: { questions: [], approvals: [] },
   events: [],
   /** True while another backward history page is in flight. */
@@ -109,18 +113,24 @@ export function isPinned (sessionId) {
 const itemCache = new Map()
 const groupCache = new Map()
 
-/** @returns a signature that changes whenever the rendered content of an item would change. */
+/**
+ * @returns a signature that changes whenever the rendered content of an item would change.
+ *
+ * Every field is read defensively. This runs over the whole transcript on every pass, so one unexpected
+ * shape — an item built by a different branch — would otherwise throw and leave the reader with nothing
+ * at all, which is exactly what an orphan tool result used to do.
+ */
 function signatureOf (item) {
   if (item.kind === 'user') {
-    return `user|${item.text}|${String(item.notes.length)}|${String(item.images.length)}|${String(item.files.length)}`
+    return `user|${String(item.text ?? '')}|${String(item.notes?.length ?? 0)}|${String(item.images?.length ?? 0)}|${String(item.files?.length ?? 0)}`
   }
   if (item.kind === 'assistant') {
-    return `assistant|${String(item.text.length)}|${String(item.reasoning.length)}|${String(item.images.length)}|${String(item.files.length)}`
+    return `assistant|${String(item.text?.length ?? 0)}|${String(item.reasoning?.length ?? 0)}|${String(item.images?.length ?? 0)}|${String(item.files?.length ?? 0)}`
   }
   if (item.kind === 'tool') {
-    return `tool|${item.name}|${String(item.args.length)}|${String(item.result?.length ?? -1)}|${String(item.error ?? '')}|${String(item.answers.length)}`
+    return `tool|${String(item.name ?? '')}|${String(item.args?.length ?? 0)}|${String(item.result?.length ?? -1)}|${String(item.error ?? '')}|${String(item.answers?.length ?? 0)}`
   }
-  return `${item.kind}|${item.text ?? ''}`
+  return `${String(item.kind)}|${String(item.text ?? '')}`
 }
 
 /**
@@ -152,6 +162,23 @@ function stabilizeGroup (group) {
 function resetTranscriptCache () {
   itemCache.clear()
   groupCache.clear()
+}
+
+/** Parsed message parts, keyed by the message object they came from. */
+const partsCache = new WeakMap()
+
+/** How many events are kept in memory before the oldest are dropped. */
+const MAX_EVENTS = 2000
+
+/**
+ * @param sessions - the Session list from the Host.
+ * @param pinned - pinned ids.
+ * @param archived - archived ids.
+ * @returns a fingerprint of everything the sidebar draws from.
+ */
+function sessionFingerprint (sessions, pinned, archived) {
+  const rows = sessions.map((session) => `${session.id}:${String(session.updatedAt ?? '')}:${String(session.title ?? '')}:${session.running === true ? '1' : '0'}`)
+  return `${rows.join('|')}~${pinned.join(',')}~${archived.join(',')}`
 }
 
 export const transcriptItems = computed(() => {
@@ -251,12 +278,17 @@ export const transcriptItems = computed(() => {
         item.answers = item.questions.length > 0 ? parseQuestionResult(item.result) : []
         item.error = data.error === undefined ? undefined : String(data.error.name ?? 'error')
       } else {
+        // A result whose call is not in the window — which is normal when a long Session opens part-way
+        // through a run — still has to be a complete tool item: the renderer and the identity cache both
+        // read every field, and a missing one used to take the whole transcript down.
         items.push({
           kind: 'tool',
           key: `tool-result-${String(event.seq)}`,
           callId,
           name: 'tool',
           args: '',
+          questions: [],
+          answers: [],
           result: blocksToText(data.message),
           error: data.error === undefined ? undefined : String(data.error.name ?? 'error'),
         })
@@ -356,6 +388,15 @@ export function isContextNote (data, text = '') {
  * @returns `{ text, reasoning, files }`.
  */
 export function messageParts (message) {
+  const cached = partsCache.get(message)
+  if (cached !== undefined) return cached
+  const parts = computeMessageParts(message)
+  partsCache.set(message, parts)
+  return parts
+}
+
+/** @returns the parsed parts, computed once per message object. */
+function computeMessageParts (message) {
   const text = []
   const reasoning = []
   const files = []
@@ -429,18 +470,32 @@ export async function loadState () {
   try {
     const payload = await api('/api/state')
     state.bind = payload.bind ?? ''
-    state.sessions = payload.sessions ?? []
+    // Replacing the array re-renders the whole sidebar, and the Host's status broadcasts fire this
+    // loader repeatedly. When nothing the sidebar draws from has changed, the array is left alone.
+    const sessions = payload.sessions ?? []
+    installManagement(payload)
+    const fingerprint = sessionFingerprint(sessions, state.pinnedSessionIds, state.archivedSessionIds)
+    if (fingerprint !== state.sessionFingerprint) {
+      state.sessionFingerprint = fingerprint
+      state.sessions = sessions
+    }
     state.workspaces = payload.workspaces ?? []
     state.pending = payload.pending ?? { questions: [], approvals: [] }
     if (payload.telemetry !== undefined) state.telemetryBySession = payload.telemetry
-    installManagement(payload)
     state.unauthorized = false
     state.bootError = ''
     state.booted = true
     if (state.selected === undefined) {
       const running = state.sessions.find((session) => session.running)
       const first = running ?? state.sessions[0]
-      if (first !== undefined) await selectSession(first.id)
+      // Restore where the page was left, when that Session is still in the list. A remembered id that has
+    // since been archived away falls back to the first Session, so a reload can never land on nothing.
+    const remembered = rememberedSession()
+    const restored = remembered === ''
+      ? undefined
+      : state.sessions.find((session) => session.id === remembered)
+    const initial = restored ?? first
+    if (initial !== undefined) await selectSession(initial.id)
     }
   } catch (error) {
     if (error instanceof UnauthorizedError) {
@@ -494,9 +549,58 @@ function refreshSoon () {
   }, 1200)
 }
 
+/** The key this page remembers the open Session under. */
+const SESSION_KEY = 'rc.session'
+
+/** @returns the remembered Session id, or an empty string when there is none. */
+function rememberedSession () {
+  try {
+    return window.localStorage.getItem(SESSION_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * @param sessionId - the Session to remember.
+ *
+ * A blocked storage must not break switching, so a failure here is silent: the page simply forgets.
+ */
+function rememberSession (sessionId) {
+  try {
+    window.localStorage.setItem(SESSION_KEY, sessionId)
+  } catch {
+    /* nothing to do */
+  }
+}
+
+/**
+ * Safety net for a snapshot that never arrives.
+ *
+ * The flag is normally cleared by the snapshot itself; this only exists so a dropped connection cannot
+ * leave a spinner running forever.
+ */
+let sessionTimer
+
+/** Mark the Session content as loaded, whatever the reason. */
+function finishSessionLoad () {
+  if (sessionTimer !== undefined) {
+    window.clearTimeout(sessionTimer)
+    sessionTimer = undefined
+  }
+  state.sessionLoading = false
+}
+
 /** Follow one Session: reset the transcript, then stream frames into the store. */
 export async function selectSession (sessionId) {
   state.selected = sessionId
+  // One place records the choice, so every path into a Session — sidebar, restore, Host push — is kept.
+  rememberSession(sessionId)
+  // The transcript is empty from here until the snapshot lands, which is worth saying out loud: an empty
+  // transcript and a loading one look identical otherwise.
+  state.sessionLoading = true
+  if (sessionTimer !== undefined) window.clearTimeout(sessionTimer)
+  sessionTimer = window.setTimeout(finishSessionLoad, 15_000)
   state.events = []
   resetTranscriptCache()
   state.live = { attemptId: undefined, text: '', reasoning: '' }
@@ -522,7 +626,11 @@ export async function selectSession (sessionId) {
       if (Array.isArray(payload) === false) installManagement(payload)
       refreshSoon()
     },
-    onError: (message) => { state.streamError = message },
+    onError: (message) => {
+      state.streamError = message
+      // A failed stream is not a pending one; the note explains it instead of a spinner.
+      finishSessionLoad()
+    },
     onOpen: () => { state.streamError = '' },
   })
   await Promise.all([loadPermissions(sessionId), refreshSelection()])
@@ -618,7 +726,19 @@ function handleFrame (frame) {
       .filter((record) => record?.type === 'event')
       .map((record) => record.event)
     resetTranscriptCache()
+    // A chunked snapshot is only complete once the last chunk says so; an unchunked one is complete
+    // immediately (an earlier Host sent exactly one snapshot frame).
+    if (frame.last !== false) finishSessionLoad()
     state.telemetry.running = selectedSession.value?.running === true
+    return
+  }
+  if (frame.type === 'snapshot-append') {
+    // The rest of a large snapshot, folded as it lands.
+    const more = (frame.records ?? [])
+      .filter((record) => record?.type === 'event')
+      .map((record) => record.event)
+    if (more.length > 0) state.events.push(...more)
+    if (frame.last === true) finishSessionLoad()
     return
   }
   if (frame.type === 'event') {
