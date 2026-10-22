@@ -1,6 +1,7 @@
 {
   "name": "dsh-remote-control-ui",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "version": "1.0.0",
   "scripts": {
