@@ -120,6 +120,7 @@ node plugins/remote-control/tools/test-remote-ui-questions.mjs # questions: argu
 node plugins/remote-control/tools/test-remote-ui-rail.mjs      # prompt rail: ticks, active detection, geometry
 node plugins/remote-control/tools/test-remote-ui-layout.mjs    # mobile detection: viewport vs overflow
 node plugins/remote-control/tools/test-remote-ui-highlight.mjs # highlighting: language set, injection, Markdown pipeline
+node plugins/remote-control/tools/test-remote-ui-loading.mjs   # loading phases: slow notice, failure, retry and cancel
 
 # read-only probe against a running instance
 node plugins/remote-control/tools/smoke-remote-control.mjs http://127.0.0.1:19400 <sessionId>

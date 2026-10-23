@@ -10,6 +10,8 @@ import PendingPanel from './PendingPanel.vue'
 import PromptRail from './PromptRail.vue'
 import ComboBox from './ComboBox.vue'
 import AppIcon from './AppIcon.vue'
+import { canCancel, canRetry, loadMessage, loadPhase } from '../lib/loading.js'
+import { cancelOlder, retrySession, setLightweight } from '../lib/store.js'
 import GLightbox from 'glightbox'
 import { setScrollRoot } from '../lib/lazy-render.js'
 import 'glightbox/dist/css/glightbox.min.css'
@@ -38,6 +40,10 @@ if (typeof window !== 'undefined' && window.__rcFancyboxBound !== true) {
     box.open()
   })
 }
+
+/** How the current Session load should read: skeleton, slow notice, or failure with a retry. */
+const sessionPhase = computed(() => loadPhase(state.sessionLoading, state.sessionSlow, state.sessionFailed))
+const sessionHint = computed(() => loadMessage(sessionPhase.value, '会话'))
 
 /** Settings sheet: a centred modal opened from the header. */
 const settingsOpen = ref(false)
@@ -358,6 +364,18 @@ onBeforeUnmount(() => {
             <span>紧凑消息间距</span>
             <input v-model="dense" type="checkbox" class="h-3.5 w-3.5" />
           </label>
+          <label class="mb-3 flex items-start justify-between gap-3 text-[13px]">
+            <span class="min-w-0">
+              省流模式
+              <span class="mt-0.5 block text-[11px] text-zinc-400">不加载图片附件，并关闭毛玻璃与动效，适合弱网</span>
+            </span>
+            <input
+              :checked="state.lightweight"
+              type="checkbox"
+              class="mt-0.5 h-3.5 w-3.5"
+              @change="setLightweight($event.target.checked)"
+            />
+          </label>
 
           <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">连接</p>
           <dl class="mb-3 space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
@@ -437,12 +455,13 @@ onBeforeUnmount(() => {
       </div>
     </Teleport>
 
-    <p
+    <div
       v-if="state.streamError"
-      class="mx-2 mt-2 rounded-xl border border-amber-300/60 bg-amber-100/70 px-3 py-1 text-[12px] text-amber-800 backdrop-blur-xl dark:border-amber-400/30 dark:bg-amber-500/15 dark:text-amber-200"
+      class="mx-2 mt-2 flex items-center gap-2 rounded-xl border border-amber-300/60 bg-amber-100/70 px-3 py-1 text-[12px] text-amber-800 backdrop-blur-xl dark:border-amber-400/30 dark:bg-amber-500/15 dark:text-amber-200"
     >
-      {{ state.streamError }}
-    </p>
+      <span class="min-w-0 flex-1">{{ state.streamError }}</span>
+      <button class="shrink-0 underline" type="button" @click="retrySession">重试</button>
+    </div>
 
     <div class="relative min-h-0 flex-1">
       <div
@@ -454,15 +473,23 @@ onBeforeUnmount(() => {
         <div class="transcript mx-auto flex max-w-3xl flex-col"
       :class="dense ? 'gap-2' : 'gap-4'">
           <!-- The opening window is bounded, so a long Session pages backwards from here. -->
-          <div v-if="state.hasOlder && transcriptItems.length > 0" class="flex justify-center">
-            <button class="chip" type="button" :disabled="state.loadingOlder" @click="loadEarlier">
-              <AppIcon
-                :name="state.loadingOlder ? 'refresh' : 'chevron'"
-                :size="12"
-                :class="state.loadingOlder ? 'animate-spin' : 'rotate-90'"
-              />
-              <span>{{ state.loadingOlder ? '加载中…' : '加载更早的消息' }}</span>
-            </button>
+          <div v-if="state.hasOlder && transcriptItems.length > 0" class="flex flex-col items-center gap-1.5">
+            <div class="flex items-center gap-2">
+              <button class="chip" type="button" :disabled="state.loadingOlder" @click="loadEarlier">
+                <AppIcon
+                  :name="state.loadingOlder ? 'refresh' : 'chevron'"
+                  :size="12"
+                  :class="state.loadingOlder ? 'animate-spin' : 'rotate-90'"
+                />
+                <span>{{ state.loadingOlder ? (state.olderSlow ? '网络较慢，仍在加载…' : '加载中…') : '加载更早的消息' }}</span>
+              </button>
+              <!-- A slow link should not trap the reader in a request they cannot stop. -->
+              <button v-if="state.loadingOlder" class="chip" type="button" @click="cancelOlder">取消</button>
+            </div>
+            <p v-if="state.olderError !== ''" class="text-[12px] text-rose-500">
+              {{ state.olderError }}
+              <button class="ml-1 underline" type="button" @click="loadEarlier">重试</button>
+            </p>
           </div>
           <!-- Loading a Session looks like the shape of what is coming, rather than claiming the Session
                is empty while it is still being read. -->
@@ -474,15 +501,15 @@ onBeforeUnmount(() => {
           >
             <p class="flex items-center gap-2 text-[12px] text-zinc-400">
               <AppIcon name="refresh" :size="12" class="animate-spin" />
-              <span>正在载入会话…</span>
+              <span>{{ sessionHint === '' ? '正在载入会话…' : sessionHint }}</span>
             </p>
-            <div class="card rc-skeleton animate-pulse space-y-2 p-3">
+            <div class="card rc-shimmer space-y-2 p-3">
               <div class="h-2.5 w-2/3 rounded-full bg-black/10 dark:bg-white/10" />
               <div class="h-2.5 w-5/6 rounded-full bg-black/10 dark:bg-white/10" />
               <div class="h-2.5 w-1/3 rounded-full bg-black/10 dark:bg-white/10" />
             </div>
             <div class="flex justify-end">
-              <div class="prompt-glass rc-skeleton animate-pulse w-1/2 space-y-2 px-4 py-2.5">
+              <div class="prompt-glass rc-shimmer w-1/2 space-y-2 px-4 py-2.5">
                 <div class="h-2.5 w-3/4 rounded-full bg-black/10 dark:bg-white/10" />
                 <div class="h-2.5 w-1/2 rounded-full bg-black/10 dark:bg-white/10" />
               </div>
@@ -490,6 +517,13 @@ onBeforeUnmount(() => {
           </div>
           <!-- Events that fold into nothing is a different situation from an empty Session, and saying
                which one it is saves a lot of guessing. -->
+          <div
+            v-else-if="canRetry(sessionPhase) && transcriptItems.length === 0"
+            class="flex flex-col items-center gap-3 py-16 text-center"
+          >
+            <p class="text-sm text-amber-600 dark:text-amber-300">{{ sessionHint }}</p>
+            <button class="btn btn-primary" type="button" @click="retrySession">重试</button>
+          </div>
           <p
             v-else-if="transcriptItems.length === 0 && state.events.length > 0 && !state.live.text"
             class="px-6 py-16 text-center text-sm text-amber-600 dark:text-amber-300"

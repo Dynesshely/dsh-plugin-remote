@@ -1,11 +1,24 @@
 import { computed, reactive } from 'vue'
 import { api, openStream, UnauthorizedError } from './api.js'
 import { parseQuestionArgs, parseQuestionResult } from './questions.js'
+import { FAIL_AFTER_MS, SLOW_AFTER_MS } from './loading.js'
 
 /** Everything the shell renders; Session events are folded into `events` and `telemetry` here. */
 export const state = reactive({
   /** Fingerprint of the Session list, so an unchanged catalog is not re-applied. */
   sessionFingerprint: '',
+  /** Set once the boot request has failed, so the page can offer a retry instead of a blank screen. */
+  bootError: '',
+  /** True once a Session switch has been waiting long enough to be worth admitting. */
+  sessionSlow: false,
+  /** True once a Session switch has been given up on; the page offers a retry. */
+  sessionFailed: false,
+  /** Message from the last failed "load earlier" attempt. */
+  olderError: '',
+  /** True once paging backwards has been waiting long enough to be worth admitting. */
+  olderSlow: false,
+  /** Text-only mode: fewer bytes moved, no glass, no motion. */
+  lightweight: false,
   booted: false,
   unauthorized: false,
   bootError: '',
@@ -438,6 +451,9 @@ const attachmentPending = new Set()
  * @param attachmentId - durable attachment identity.
  */
 export function ensureAttachmentImage (sessionId, attachmentId) {
+  // Text-only mode moves no image bytes at all: attachments are base64 payloads and the most expensive
+  // thing the page can ask for over a slow link.
+  if (state.lightweight) return
   if (sessionId === undefined || sessionId === null || attachmentId === '') return
   const key = `${sessionId}:${attachmentId}`
   if (attachmentImages.has(key) || attachmentPending.has(key)) return
@@ -549,6 +565,29 @@ function refreshSoon () {
   }, 1200)
 }
 
+/** Timers for "this is taking a while" notices, one per surface. */
+const slowTimers = new Map()
+
+/**
+ * @param key - the surface, e.g. `session`.
+ * @param onSlow - called once after SLOW_AFTER_MS, unless cancelled first.
+ */
+function watchSlow (key, onSlow) {
+  clearSlowWatch(key)
+  slowTimers.set(key, window.setTimeout(() => {
+    slowTimers.delete(key)
+    onSlow()
+  }, SLOW_AFTER_MS))
+}
+
+/** @param key - the surface to stop watching. */
+function clearSlowWatch (key) {
+  const timer = slowTimers.get(key)
+  if (timer === undefined) return
+  window.clearTimeout(timer)
+  slowTimers.delete(key)
+}
+
 /** The key this page remembers the open Session under. */
 const SESSION_KEY = 'rc.session'
 
@@ -588,7 +627,18 @@ function finishSessionLoad () {
     window.clearTimeout(sessionTimer)
     sessionTimer = undefined
   }
+  clearSlowWatch('session')
   state.sessionLoading = false
+  state.sessionSlow = false
+  state.sessionFailed = false
+}
+
+/** Try the current Session again after a failed or timed-out load. */
+export async function retrySession () {
+  const sessionId = state.selected
+  if (sessionId === undefined) return
+  state.sessionFailed = false
+  await selectSession(sessionId)
 }
 
 /** Follow one Session: reset the transcript, then stream frames into the store. */
@@ -599,8 +649,21 @@ export async function selectSession (sessionId) {
   // The transcript is empty from here until the snapshot lands, which is worth saying out loud: an empty
   // transcript and a loading one look identical otherwise.
   state.sessionLoading = true
+  state.sessionSlow = false
+  state.sessionFailed = false
+  watchSlow('session', () => {
+    if (state.sessionLoading) state.sessionSlow = true
+  })
   if (sessionTimer !== undefined) window.clearTimeout(sessionTimer)
-  sessionTimer = window.setTimeout(finishSessionLoad, 15_000)
+  // Giving up is a visible state with a retry, not a silent return to an empty transcript.
+  sessionTimer = window.setTimeout(() => {
+    sessionTimer = undefined
+    if (!state.sessionLoading) return
+    clearSlowWatch('session')
+    state.sessionLoading = false
+    state.sessionSlow = false
+    state.sessionFailed = true
+  }, FAIL_AFTER_MS)
   state.events = []
   resetTranscriptCache()
   state.live = { attemptId: undefined, text: '', reasoning: '' }
@@ -628,8 +691,9 @@ export async function selectSession (sessionId) {
     },
     onError: (message) => {
       state.streamError = message
-      // A failed stream is not a pending one; the note explains it instead of a spinner.
+      // A failed stream is not a pending one; the note explains it, and the reader gets a retry.
       finishSessionLoad()
+      if (state.events.length === 0) state.sessionFailed = true
     },
     onOpen: () => { state.streamError = '' },
   })
@@ -644,6 +708,8 @@ export async function selectSession (sessionId) {
  * grew by, so the caller can keep the reader's scroll anchor.
  * @returns the added content height in px.
  */
+let olderAbort
+
 export async function loadOlder () {
   if (state.loadingOlder || !state.hasOlder) return 0
   const first = state.events[0]
@@ -653,8 +719,17 @@ export async function loadOlder () {
     return 0
   }
   state.loadingOlder = true
+  state.olderError = ''
+  const controller = new AbortController()
+  olderAbort = controller
+  watchSlow('older', () => {
+    if (state.loadingOlder) state.olderSlow = true
+  })
   try {
-    const payload = await api(`/api/older?sessionId=${encodeURIComponent(sessionId)}&beforeSeq=${String(first.seq)}`)
+    const payload = await api(`/api/older?sessionId=${encodeURIComponent(sessionId)}&beforeSeq=${String(first.seq)}`, {
+      signal: controller.signal,
+      timeoutMs: 30_000,
+    })
     const records = Array.isArray(payload.records) ? payload.records : []
     const older = records
       .filter((record) => record?.type === 'event' && record.event?.seq < first.seq)
@@ -669,10 +744,38 @@ export async function loadOlder () {
     if (payload.hasMore !== true) state.hasOlder = false
     return fresh.length
   } catch (error) {
-    state.streamError = String(error.message ?? error)
+    const message = String(error.message ?? error)
+    // Cancelling is not a failure, so it must not be reported as one.
+    if (message !== '已取消') state.olderError = message
     return 0
   } finally {
+    clearSlowWatch('older')
+    olderAbort = undefined
+    state.olderSlow = false
     state.loadingOlder = false
+  }
+}
+
+/** Abort an in-flight "load earlier" without waiting for the network. */
+export function cancelOlder () {
+  olderAbort?.abort()
+  olderAbort = undefined
+  state.olderSlow = false
+  state.loadingOlder = false
+}
+
+/**
+ * @param value - whether to run in text-only mode.
+ *
+ * Turns the page into something usable on a bad link: attachment bytes are not fetched at all, and the
+ * CSS drops the glass and the motion.
+ */
+export function setLightweight (value) {
+  state.lightweight = value === true
+  try {
+    window.localStorage.setItem('rc.lightweight', state.lightweight ? '1' : '0')
+  } catch {
+    /* a blocked storage keeps the in-memory value */
   }
 }
 

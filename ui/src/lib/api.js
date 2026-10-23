@@ -20,14 +20,33 @@ export class UnauthorizedError extends Error {
  * @param options - optional method and JSON body.
  * @returns the parsed response body.
  */
+/**
+ * How long a request may stay unanswered.
+ *
+ * A fetch on a link that has silently died used to hang forever, which is what left the page spinning
+ * with no way out. Failing here turns that into a retryable error the UI can offer.
+ */
+const DEFAULT_TIMEOUT_MS = 20_000
+
 export async function api (path, options = {}) {
+  const signals = [AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)]
+  if (options.signal !== undefined) signals.push(options.signal)
   const init = {
     method: options.method ?? 'GET',
     headers: { 'x-rc': '1', ...(options.body === undefined ? {} : { 'content-type': 'application/json' }) },
     ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: options.signal,
+    signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals),
   }
-  const response = await fetch(path, init)
+  let response
+  try {
+    response = await fetch(path, init)
+  } catch (error) {
+    // Distinguish the three cases a caller cares about: cancelled, timed out, never reached the Host.
+    if (options.signal?.aborted === true) throw new Error('已取消')
+    if (error?.name === 'TimeoutError') throw new Error('请求超时，请重试')
+    if (error?.name === 'AbortError') throw new Error('已取消')
+    throw new Error('无法连接到宿主，请检查网络')
+  }
   if (response.status === 401) throw new UnauthorizedError()
   const text = await response.text()
   const payload = text === '' ? {} : JSON.parse(text)

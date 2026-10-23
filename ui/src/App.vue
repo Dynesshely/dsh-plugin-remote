@@ -3,6 +3,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { consumeLinkToken, login } from './lib/api.js'
 import { loadModels, loadState, state } from './lib/store.js'
 import { mobile } from './lib/layout.js'
+import { loadMessage, loadPhase, SLOW_AFTER_MS } from './lib/loading.js'
+import AppIcon from './components/AppIcon.vue'
 import SidebarPane from './components/SidebarPane.vue'
 import ConversationPane from './components/ConversationPane.vue'
 
@@ -18,6 +20,32 @@ const token = ref('')
 const loginError = ref('')
 
 const media = window.matchMedia('(prefers-color-scheme: dark)')
+
+/** True once the very first request has been waiting long enough to be worth admitting. */
+const bootSlow = ref(false)
+let bootTimer
+
+watch(() => state.booted, (value) => {
+  window.clearTimeout(bootTimer)
+  bootSlow.value = false
+  if (value) return
+  bootTimer = window.setTimeout(() => { bootSlow.value = true }, SLOW_AFTER_MS)
+}, { immediate: true })
+
+/** How the boot request should read right now. */
+const bootPhase = computed(() => loadPhase(!state.booted, bootSlow.value, state.bootError !== ''))
+const bootHint = computed(() => loadMessage(bootPhase.value, '应用状态'))
+
+/**
+ * Retry the first state request.
+ *
+ * The store marks the page booted even when the request failed, and keeps the reason in `bootError` — so
+ * the overlay keys off the error too, and clearing it is what brings the skeleton back.
+ */
+function retryBoot () {
+  state.bootError = ''
+  void loadState()
+}
 
 /** Apply the chosen theme: `system` follows the OS, the other two pin it. */
 function applyTheme () {
@@ -144,7 +172,12 @@ async function submitToken () {
 </script>
 
 <template>
-  <div class="relative h-full" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
+  <div
+    class="relative h-full"
+    :class="state.lightweight ? 'lightweight' : ''"
+    @touchstart.passive="onTouchStart"
+    @touchend.passive="onTouchEnd"
+  >
     <!-- Liquid-glass backdrop: drifting colour fields that also cycle hue, so the frosted panels
          sit on something that keeps moving. -->
     <div class="drift-hue pointer-events-none fixed inset-0 -z-10 overflow-hidden">
@@ -154,6 +187,27 @@ async function submitToken () {
       <div class="drift-b absolute left-1/3 top-1/2 h-80 w-80 rounded-full bg-cyan-300/25 blur-3xl dark:bg-cyan-500/20" style="animation-delay: -9s" />
       <div class="drift-a absolute bottom-1/4 right-1/4 h-72 w-72 rounded-full bg-violet-300/25 blur-3xl dark:bg-violet-500/20" style="animation-delay: -14s" />
       <div class="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/30 dark:from-black/30 dark:via-transparent dark:to-black/40" />
+    </div>
+
+    <!-- Boot: the first state request takes seconds on a slow link, and a blank page reads as broken. -->
+    <div
+      v-if="!state.unauthorized && (!state.booted || (state.bootError !== '' && state.sessions.length === 0))"
+      class="fixed inset-0 z-[130] flex items-center justify-center bg-white/70 px-6 backdrop-blur-xl dark:bg-zinc-950/80"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div class="w-full max-w-md">
+        <p class="mb-3 flex items-center gap-2 text-[13px] text-zinc-500 dark:text-zinc-400">
+          <AppIcon v-if="state.bootError === ''" name="refresh" :size="13" class="animate-spin" />
+          <span>{{ state.bootError !== '' ? state.bootError : (bootHint === '' ? '正在连接 DSH…' : bootHint) }}</span>
+        </p>
+        <div v-if="state.bootError === ''" class="space-y-2">
+          <div class="rc-shimmer h-14" />
+          <div class="rc-shimmer h-24" />
+          <div class="rc-shimmer h-16" />
+        </div>
+        <button v-else class="btn btn-primary" type="button" @click="retryBoot">重试</button>
+      </div>
     </div>
 
     <!-- Token gate -->
