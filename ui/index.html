@@ -12,9 +12,31 @@
     <link rel="icon" type="image/png" sizes="64x64" href="./favicon-64.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <title>DSH REMOTE</title>
+    <!--
+      First-paint splash.
+
+      Inline on purpose: it has to be on screen as soon as the document is, which rules out anything served
+      from the bundle — the app is a megabyte of JavaScript and the stylesheet is render-blocking. Nothing
+      here depends on the app: every selector is namespaced, and the theme comes from the OS rather than
+      the in-app setting, so it is right before any JavaScript has run.
+    -->
+    <style>
+      #rc-splash{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;padding:1.5rem;background:#f4f4f5;color:#52525b;font:500 13px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;animation:rc-splash-in .2s ease-out both}
+      .rc-splash-ring{width:2.25rem;height:2.25rem;border-radius:50%;border:3px solid rgb(0 0 0/.08);border-top-color:#2563eb;animation:rc-splash-spin .9s linear infinite}
+      .rc-splash-hint{font-size:12px;font-weight:400;color:#71717a;opacity:0;animation:rc-splash-hint .4s ease 8s forwards}
+      .rc-splash-hint a{color:#2563eb}
+      @keyframes rc-splash-spin{to{transform:rotate(1turn)}}
+      @keyframes rc-splash-in{from{opacity:0}}
+      @keyframes rc-splash-hint{to{opacity:1}}
+      @media (prefers-color-scheme:dark){#rc-splash{background:#07080c;color:#a1a1aa}.rc-splash-ring{border-color:rgb(255 255 255/.12);border-top-color:#60a5fa}.rc-splash-hint{color:#71717a}.rc-splash-hint a{color:#60a5fa}}
+      @media (prefers-reduced-motion:reduce){#rc-splash,.rc-splash-ring,.rc-splash-hint{animation:none}.rc-splash-hint{opacity:1}}
+      /* Pure CSS hand-off: the moment the app puts anything inside #app, the splash is gone. */
+      #app:not(:empty)~#rc-splash{opacity:0;visibility:hidden;transition:opacity .25s ease,visibility 0s .25s}
+    </style>
   </head>
   <body class="h-full">
     <div id="app" class="h-full"></div>
+    <div id="rc-splash" role="status" aria-live="polite"><span class="rc-splash-ring"></span><span class="rc-splash-text">正在载入 DSH Remote…</span><span class="rc-splash-hint">网络较慢，仍在尝试 · <a href="./">重新载入</a></span></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
