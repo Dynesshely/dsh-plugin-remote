@@ -40,6 +40,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir, networkInterfaces } from 'node:os'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gzip, gzipSync } from 'node:zlib'
 
 /** This plugin cannot do anything useful without the Session Controller. */
 export const inject = ['sessionController']
@@ -190,16 +191,88 @@ async function readJson (request, limit = MAX_BODY) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-/** Write one JSON response. */
+/** Payloads below this are not worth the round trip through zlib. */
+const COMPRESS_MIN_BYTES = 1024
+/** Above this a JSON body is treated as incompressible payload (base64 attachment bytes) and left alone. */
+const COMPRESS_MAX_JSON_BYTES = 4 * 1024 * 1024
+/**
+ * Compressed immutable assets, keyed by request path.
+ *
+ * Files under `assets/` carry a content hash in their name, so a given path never changes its bytes —
+ * which makes caching the compressed copy both safe and the difference between compressing the 1.3 MB
+ * bundle once and doing it on every reload.
+ */
+const compressedAssets = new Map()
+
+/**
+ * @param request - the incoming request.
+ * @returns whether the client accepts a gzip body.
+ */
+function acceptsGzip (request) {
+  const header = request?.headers?.['accept-encoding']
+  return typeof header === 'string' && /\bgzip\b/iu.test(header)
+}
+
+/**
+ * @param type - the response content type.
+ * @returns whether compressing it is worthwhile. Images and other binaries are already compressed.
+ */
+function compressibleType (type) {
+  return /^(?:text\/|application\/(?:json|javascript|xml)|image\/svg)/iu.test(String(type))
+}
+
+/**
+ * @param pathname - the asset path.
+ * @param body - the asset bytes.
+ * @returns the compressed bytes, computed once per path.
+ */
+function compressedAsset (pathname, body) {
+  const cached = compressedAssets.get(pathname)
+  if (cached !== undefined) return cached
+  const gz = gzipSync(body)
+  compressedAssets.set(pathname, gz)
+  return gz
+}
+
+/**
+ * Write one JSON response, compressed when that helps.
+ *
+ * The compression runs asynchronously: a page of older history is a couple of megabytes of JSON, and
+ * doing that on the event loop would stall the very connection it is meant to speed up.
+ */
 function sendJson (response, status, body, headers = {}) {
   const payload = JSON.stringify(body)
-  response.writeHead(status, {
+  const size = Buffer.byteLength(payload)
+  const base = {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     ...headers,
+  }
+  const compress = size >= COMPRESS_MIN_BYTES
+    && size <= COMPRESS_MAX_JSON_BYTES
+    && acceptsGzip(response.req)
+  if (!compress) {
+    response.writeHead(status, base)
+    response.end(payload)
+    return
+  }
+  gzip(payload, (error, compressed) => {
+    // The client may have gone away while zlib was working.
+    if (response.writableEnded) return
+    if (error !== null) {
+      response.writeHead(status, base)
+      response.end(payload)
+      return
+    }
+    response.writeHead(status, {
+      ...base,
+      'content-encoding': 'gzip',
+      'content-length': String(compressed.length),
+      vary: 'accept-encoding',
+    })
+    response.end(compressed)
   })
-  response.end(payload)
 }
 
 /** @returns the Session catalog shaped for the page. */
@@ -601,9 +674,16 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
             if (client.closed || client.sessionAbort !== controller) return
             const chunk = records.slice(at, at + SNAPSHOT_CHUNK)
             const last = at + SNAPSHOT_CHUNK >= records.length
+            // The reader cannot tell how much is left from the transcript alone, so each chunk says where
+            // it sits in the sequence.
+            const progress = {
+              chunkIndex: at / SNAPSHOT_CHUNK,
+              chunkCount: Math.ceil(records.length / SNAPSHOT_CHUNK),
+              totalRecords: records.length,
+            }
             writeEvent(client, 'frame', at === 0
-              ? { type: 'snapshot', records: chunk, last }
-              : { type: 'snapshot-append', records: chunk, last })
+              ? { type: 'snapshot', records: chunk, last, ...progress }
+              : { type: 'snapshot-append', records: chunk, last, ...progress })
           }
           continue
         }
@@ -678,15 +758,22 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       const isShellRequest = url.pathname === '/' || url.pathname === '/index.html' || asset === undefined
       const body = isShellRequest ? (existsSync(DIST_INDEX) ? readFileSync(DIST_INDEX) : Buffer.from(legacyPage, 'utf8')) : asset.body
       const type = isShellRequest ? MIME['.html'] : asset.type
+      // The bundle and the shell are the two largest things this server sends, so compression is what
+      // makes a slow link usable at all. Immutable assets are compressed once and remembered.
+      const compress = body.length >= COMPRESS_MIN_BYTES && compressibleType(type) && acceptsGzip(request)
+      const payload = compress
+        ? (asset?.immutable === true ? compressedAsset(url.pathname, body) : gzipSync(body))
+        : body
       response.writeHead(200, {
         'content-type': type,
+        ...(compress ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}),
         'cache-control': isShellRequest || asset?.immutable !== true ? 'no-store' : 'public, max-age=31536000, immutable',
         'referrer-policy': 'no-referrer',
         'x-content-type-options': 'nosniff',
         // The shell needs its own bundle plus inline styles; everything else stays blocked.
         'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       })
-      response.end(body)
+      response.end(payload)
       return
     }
     if (request.method === 'GET' && url.pathname === '/healthz') {
