@@ -10,7 +10,7 @@ import PendingPanel from './PendingPanel.vue'
 import PromptRail from './PromptRail.vue'
 import ComboBox from './ComboBox.vue'
 import AppIcon from './AppIcon.vue'
-import { canCancel, canRetry, loadMessage, loadPhase } from '../lib/loading.js'
+import { canCancel, canRetry, loadMessage, loadPhase, snapshotLine } from '../lib/loading.js'
 import { cancelOlder, retrySession, setLightweight } from '../lib/store.js'
 import GLightbox from 'glightbox'
 import { setScrollRoot } from '../lib/lazy-render.js'
@@ -44,6 +44,17 @@ if (typeof window !== 'undefined' && window.__rcFancyboxBound !== true) {
 /** How the current Session load should read: skeleton, slow notice, or failure with a retry. */
 const sessionPhase = computed(() => loadPhase(state.sessionLoading, state.sessionSlow, state.sessionFailed))
 const sessionHint = computed(() => loadMessage(sessionPhase.value, '会话'))
+/** Whether the snapshot notice should be on screen. */
+const snapshotVisible = computed(() => state.snapshotFlash
+  || (state.sessionLoading === true && state.snapshotProgress.loaded > 0))
+/** What it says. */
+const snapshotLabel = computed(() => snapshotLine(state.snapshotProgress, state.snapshotMs))
+/** How full the progress bar is, in percent. */
+const snapshotPercent = computed(() => {
+  const count = state.snapshotProgress.count
+  if (!(count > 0)) return 0
+  return Math.min(100, Math.round(((state.snapshotProgress.index + 1) / count) * 100))
+})
 
 /** Settings sheet: a centred modal opened from the header. */
 const settingsOpen = ref(false)
@@ -464,6 +475,33 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="relative min-h-0 flex-1">
+      <!-- The transcript fills chunk by chunk, so the page has to say when the history is complete. -->
+      <div
+        v-if="snapshotVisible"
+        class="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          class="pointer-events-auto flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] shadow-lg backdrop-blur-xl"
+          :class="state.snapshotProgress.done
+            ? 'border-emerald-300/70 bg-emerald-100/90 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/20 dark:text-emerald-200'
+            : 'border-white/60 bg-white/85 text-zinc-600 dark:border-white/15 dark:bg-zinc-900/85 dark:text-zinc-200'"
+        >
+          <AppIcon v-if="state.snapshotProgress.done" name="check" :size="13" class="shrink-0" />
+          <AppIcon v-else name="refresh" :size="13" class="shrink-0 animate-spin" />
+          <span class="truncate">{{ snapshotLabel }}</span>
+          <span
+            v-if="!state.snapshotProgress.done && state.snapshotProgress.count > 1"
+            class="relative h-1 w-16 shrink-0 overflow-hidden rounded-full bg-black/10 dark:bg-white/15"
+          >
+            <span
+              class="absolute inset-y-0 left-0 rounded-full bg-blue-500 transition-all duration-300"
+              :style="{ width: snapshotPercent + '%' }"
+            />
+          </span>
+        </div>
+      </div>
       <div
         ref="scroller"
         class="h-full overflow-y-auto py-4"

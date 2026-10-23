@@ -1,7 +1,12 @@
 import { computed, reactive } from 'vue'
 import { api, openStream, UnauthorizedError } from './api.js'
 import { parseQuestionArgs, parseQuestionResult } from './questions.js'
-import { FAIL_AFTER_MS, SLOW_AFTER_MS } from './loading.js'
+import {
+  EMPTY_SNAPSHOT_PROGRESS,
+  FAIL_AFTER_MS,
+  nextSnapshotProgress,
+  SLOW_AFTER_MS,
+} from './loading.js'
 
 /** Everything the shell renders; Session events are folded into `events` and `telemetry` here. */
 export const state = reactive({
@@ -19,6 +24,14 @@ export const state = reactive({
   olderSlow: false,
   /** Text-only mode: fewer bytes moved, no glass, no motion. */
   lightweight: false,
+  /** How much of the opening snapshot has arrived, for the progress pill. */
+  snapshotProgress: { ...EMPTY_SNAPSHOT_PROGRESS },
+  /** When the current snapshot started, on the monotonic clock. */
+  snapshotStartedAt: 0,
+  /** How long the opening snapshot took, in milliseconds. */
+  snapshotMs: 0,
+  /** True for a short while after a slow load finishes, so the completion notice is actually seen. */
+  snapshotFlash: false,
   booted: false,
   unauthorized: false,
   bootError: '',
@@ -588,6 +601,44 @@ function clearSlowWatch (key) {
   slowTimers.delete(key)
 }
 
+/** Timer that hides the completion notice again. */
+let snapshotFlashTimer
+
+/** @returns a monotonic millisecond reading, for load durations. */
+function nowMs () {
+  return typeof performance === 'object' && typeof performance.now === 'function' ? performance.now() : Date.now()
+}
+
+/** Clear the completion notice and its timer. */
+function clearSnapshotNotice () {
+  if (snapshotFlashTimer !== undefined) {
+    window.clearTimeout(snapshotFlashTimer)
+    snapshotFlashTimer = undefined
+  }
+  state.snapshotFlash = false
+}
+
+/** Record one snapshot chunk and, on the last one, decide whether the completion notice is worth showing. */
+function trackSnapshot (frame) {
+  const wasDone = state.snapshotProgress.done === true
+  if (frame.type === 'snapshot') {
+    state.snapshotStartedAt = nowMs()
+    state.snapshotMs = 0
+    clearSnapshotNotice()
+  }
+  state.snapshotProgress = nextSnapshotProgress(state.snapshotProgress, frame)
+  if (state.snapshotProgress.done !== true || wasDone) return
+  state.snapshotMs = Math.max(0, nowMs() - (state.snapshotStartedAt || nowMs()))
+  // A switch that finishes instantly needs no announcement; one the reader waited on does.
+  if (state.snapshotMs < 600) return
+  state.snapshotFlash = true
+  if (snapshotFlashTimer !== undefined) window.clearTimeout(snapshotFlashTimer)
+  snapshotFlashTimer = window.setTimeout(() => {
+    snapshotFlashTimer = undefined
+    state.snapshotFlash = false
+  }, 2800)
+}
+
 /** The key this page remembers the open Session under. */
 const SESSION_KEY = 'rc.session'
 
@@ -651,6 +702,11 @@ export async function selectSession (sessionId) {
   state.sessionLoading = true
   state.sessionSlow = false
   state.sessionFailed = false
+  // A new Session starts its own load, so the previous one's progress and notice are meaningless.
+  state.snapshotProgress = { ...EMPTY_SNAPSHOT_PROGRESS }
+  state.snapshotStartedAt = 0
+  state.snapshotMs = 0
+  clearSnapshotNotice()
   watchSlow('session', () => {
     if (state.sessionLoading) state.sessionSlow = true
   })
@@ -825,6 +881,7 @@ function handleFrame (frame) {
   if (frame === null || typeof frame !== 'object') return
   if (frame.type === 'snapshot') {
     pendingEvents = []
+    trackSnapshot(frame)
     state.events = (frame.records ?? [])
       .filter((record) => record?.type === 'event')
       .map((record) => record.event)
@@ -836,6 +893,7 @@ function handleFrame (frame) {
     return
   }
   if (frame.type === 'snapshot-append') {
+    trackSnapshot(frame)
     // The rest of a large snapshot, folded as it lands.
     const more = (frame.records ?? [])
       .filter((record) => record?.type === 'event')

@@ -37,6 +37,68 @@ export function loadMessage (phase, label) {
   return ''
 }
 
+/** An empty progress record, for a Session that is about to load. */
+export const EMPTY_SNAPSHOT_PROGRESS = Object.freeze({
+  index: 0,
+  count: 0,
+  loaded: 0,
+  total: 0,
+  done: false,
+})
+
+/**
+ * Fold one snapshot chunk into the progress record.
+ *
+ * The Host sends a snapshot as several frames on a long Session, and the transcript starts filling while
+ * they arrive — so without this the reader cannot tell "still arriving" from "everything is here". A Host
+ * that sends one unchunked snapshot omits `last`, which counts as complete.
+ * @param previous - the current record.
+ * @param frame - a `snapshot` or `snapshot-append` frame.
+ * @returns the next record.
+ */
+export function nextSnapshotProgress (previous, frame) {
+  const first = frame?.type === 'snapshot'
+  const records = Array.isArray(frame?.records) ? frame.records.length : 0
+  const index = Number(frame?.chunkIndex)
+  const count = Number(frame?.chunkCount)
+  const total = Number(frame?.totalRecords)
+  const loaded = (first ? 0 : Number(previous?.loaded) || 0) + records
+  return {
+    index: Number.isFinite(index) && index >= 0 ? index : first ? 0 : (Number(previous?.index) || 0) + 1,
+    count: Number.isFinite(count) && count > 0 ? count : Number(previous?.count) || 0,
+    loaded,
+    total: Number.isFinite(total) && total > 0 ? total : first ? records : Math.max(Number(previous?.total) || 0, loaded),
+    done: frame?.last !== false,
+  }
+}
+
+/** @returns a compact count: 2100 → "2.1k". */
+export function compactCount (value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return '0'
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`
+  if (number >= 1_000) return `${(number / 1_000).toFixed(1)}k`
+  return String(Math.round(number))
+}
+
+/**
+ * @param progress - the record from `nextSnapshotProgress`.
+ * @param elapsedMs - how long the load took, for the finished line.
+ * @returns the one line the progress pill shows.
+ */
+export function snapshotLine (progress, elapsedMs) {
+  const seconds = Number.isFinite(elapsedMs) && elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : ''
+  if (progress?.done === true) {
+    const parts = ['载入完成', `${compactCount(progress.loaded)} 条`]
+    if (seconds !== '') parts.push(seconds)
+    return parts.join(' · ')
+  }
+  const chunks = progress?.count > 1 ? `${Number(progress.index) + 1}/${String(progress.count)}` : ''
+  const loaded = Number(progress?.loaded) > 0 ? `${compactCount(progress.loaded)} 条` : ''
+  const detail = [chunks, loaded].filter((part) => part !== '').join(' · ')
+  return detail === '' ? '正在载入历史…' : `正在载入历史 · ${detail}`
+}
+
 /**
  * @param phase - the value from `loadPhase`.
  * @returns whether a retry action belongs next to the message.
