@@ -1,4 +1,4 @@
-import { createStreamParser } from './worker-client.js'
+import { createJsonParser, createStreamParser } from './worker-client.js'
 
 /**
  * Transport for the Remote Control Host plugin: JSON over fetch plus the Session SSE feed.
@@ -30,6 +30,31 @@ export class UnauthorizedError extends Error {
  */
 const DEFAULT_TIMEOUT_MS = 20_000
 
+/**
+ * 响应正文的字符数上限，超过就不解析。
+ *
+ * 解析 8MB 的 JSON 即使搬进 Worker 也要占住那份 Worker 数百毫秒到数秒；而正常响应里
+ * 出现这么大的正文基本只有异常这解释（`/api/older` 2.8MB 已是顶端）。宁可让这一次请求
+ * 明确失败，也不要把页面拖进「未响应」。
+ */
+const MAX_RESPONSE_CHARS = 8 * 1024 * 1024
+
+/**
+ * 解析响应正文。
+ *
+ * 走 Worker 的理由：`/api/older` 单次 2.8MB、`/api/state` 也有几十 KB，在主线程 `JSON.parse`
+ * 就是一次实打实的长任务（输入、滚动、高亮全部停摆）。单例维护在 worker-client.js 内部，
+ * 所以这里直接取即可，不再自己缓存一份——两处各缓存会得到两个 Worker。
+ * @param text - 已经读成文本的响应正文。
+ * @returns 解析出的值。
+ */
+async function parseResponseBody (text) {
+  const { value, error } = await createJsonParser().parse(text)
+  // 失败一定要变成一条可读的 Error 抛给调用方，而不是让 SyntaxError 自己往上冒。
+  if (error !== undefined) throw new Error(`响应解析失败：${error}`)
+  return value
+}
+
 export async function api (path, options = {}) {
   const signals = [AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)]
   if (options.signal !== undefined) signals.push(options.signal)
@@ -51,8 +76,13 @@ export async function api (path, options = {}) {
   }
   if (response.status === 401) throw new UnauthorizedError()
   const text = await response.text()
-  const payload = text === '' ? {} : JSON.parse(text)
-  if (!response.ok) throw new Error(payload.error ?? `HTTP ${String(response.status)}`)
+  // 上限必须在解析之前判断：一旦交给 JSON.parse，这份卡顿就已经花掉了。
+  if (text.length > MAX_RESPONSE_CHARS) {
+    throw new Error(`响应过大（${(text.length / (1024 * 1024)).toFixed(1)} MB），已拒绝解析`)
+  }
+  const payload = text === '' ? {} : await parseResponseBody(text)
+  // 用 `?.` 是因为合法 JSON 也可能是 `null`：那不该变成一条 TypeError。
+  if (!response.ok) throw new Error(payload?.error ?? `HTTP ${String(response.status)}`)
   return payload
 }
 
