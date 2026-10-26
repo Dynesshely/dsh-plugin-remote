@@ -108,6 +108,32 @@ pnpm --dir plugins/remote-control/ui install
 pnpm --dir plugins/remote-control/ui run build   # emits ui/dist
 ```
 
+### 运行形态（生产 / 开发）
+
+**生产：宿主是纯后端。** `index.js` 只做两件事——托管 `ui/dist` 的静态资源、提供 `/api/*`（外加
+`/healthz`）。它不内置任何页面：`ui/dist` 缺失（或没有 `index.html`）时只回一个内联样式的 503
+说明页。`/api/*` 与 `/healthz` 永不回退成 HTML；带扩展名的路径（`/assets/x.js`）缺失时回 404 ——
+否则浏览器会把 HTML 当 JS 解析，控制台里冒出一条与真问题无关的语法错误；只有无扩展名路径
+（`/`、`/files` …）回退到 `index.html`，history 路由才能直接打开。
+
+**开发：Vite 管前端，宿主只做反代。** 先用 `pnpm --dir plugins/remote-control/ui run dev` 起 Vite
+dev server（默认 `http://127.0.0.1:5173`），再把它的地址告诉宿主：
+
+```bash
+# Windows PowerShell（在启动 DSH 之前设置）
+$env:RC_DEV_ORIGIN = 'http://127.0.0.1:5173'
+
+# macOS / Linux
+export RC_DEV_ORIGIN=http://127.0.0.1:5173
+```
+
+设置后，宿主对所有非 `/api/*`、非 `/healthz` 的 GET 请求做流式反向代理（method 与 headers 原样
+转发，dev server 的响应原样回传）：HMR 与模块转换由 Vite 提供，数据和鉴权仍由宿主提供，`/api/*`
+永远不转发。该变量在插件加载时读取，**改完要重启 DSH**；不设置时行为与生产完全一致，dev server
+没起或连不上时宿主回 502 而不是崩溃。反代出来的静态路径与普通静态资源一样不校验 token，它只是
+开发开关，不要在生产上设置。用手机访问时 HMR 的 WebSocket 由浏览器直连 dev server，所以 Vite
+也要监听一个设备能访问到的地址（`server.host`）。
+
 ### Run the tests
 
 Every suite is a standalone script; none of them needs DSH to be running. The integration suite boots the
@@ -138,7 +164,7 @@ node plugins/remote-control/tools/smoke-remote-control.mjs http://127.0.0.1:1940
 
 ```
 plugins/remote-control/
-├── index.js               Host half: HTTP server, auth, routes, SSE, static files
+├── index.js               Host half: HTTP server, auth, routes, SSE, ui/dist hosting (+ dev proxy)
 ├── host/
 │   ├── hot.js             Hot-reloadable routes: session management, DSH control, presets
 │   ├── usage.js           Balance and usage aggregation, gateway first
@@ -150,7 +176,7 @@ plugins/remote-control/
 ├── locale/                UI strings (en, zh)
 ├── tools/                 Test suites, smoke probe, firewall and DSH control scripts
 ├── docs/poster.png        README hero image
-├── page.html              Fallback page used when ui/dist is missing
+├── page.html              历史遗留文件：宿主已不再读取（只托管 ui/dist）
 └── package.json, cordis.patch.yml   Bundle manifest and profile line
 ```
 

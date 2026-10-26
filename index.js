@@ -5,8 +5,9 @@
  * -----
  * The plugin owns its OWN HTTP listener; it never touches the Desktop shell's loopback carrier
  * (that one is token-gated and assumes its visitor is the Electron window). That keeps this plugin
- * free of any Electron coupling: the page is plain HTML served from here, and it speaks only to
- * this plugin's JSON+SSE API.
+ * free of any Electron coupling: it is a backend only — the built SPA in `ui/dist` is hosted from
+ * here, and it speaks only to this plugin's JSON+SSE API. In development the static half can be
+ * reverse-proxied to a Vite dev server (`RC_DEV_ORIGIN`), which is what keeps HMR working.
  *
  * It exposes three Host capabilities, all through official services:
  *
@@ -34,7 +35,7 @@
  * URLs. Failed logins are rate-limited per peer, bodies are capped, and every mutating route
  * requires a JSON content type. Binding to anything but loopback is an explicit opt-in.
  */
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, networkInterfaces } from 'node:os'
@@ -45,11 +46,39 @@ import { gzip, gzipSync } from 'node:zlib'
 /** This plugin cannot do anything useful without the Session Controller. */
 export const inject = ['sessionController']
 
-/** The legacy single-file page, kept as the fallback when the SPA has not been built. */
-const PAGE_PATH = fileURLToPath(new URL('./page.html', import.meta.url))
-/** The built Vue SPA (`ui/dist`), served as the primary UI. */
+/**
+ * The built Vue SPA (`ui/dist`) — the only UI this plugin has.
+ *
+ * There is deliberately no second, hand-written page: serving the bundle is the whole job on the
+ * document side, so "the bundle is missing" is reported instead of papered over with a page that
+ * would then have to be maintained twice.
+ */
 const DIST_ROOT = fileURLToPath(new URL('./ui/dist', import.meta.url))
+/** The bundle's entry document, also the target of the extension-less SPA fallback. */
 const DIST_INDEX = join(DIST_ROOT, 'index.html')
+/**
+ * The one HTML document this Host authors itself: what a browser gets when `ui/dist` is absent.
+ *
+ * Inline styles only — a page that explains a missing build must not depend on that build.
+ */
+const MISSING_DIST_HTML = `<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Remote Control — 前端产物缺失</title>
+<style>
+  body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #111; color: #e5e5e5;
+         font: 15px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { margin: 0 0 .5rem; font-size: 1.15rem; }
+  code { background: #222; border-radius: 4px; padding: .1rem .35rem; font-size: .875em; }
+  p { margin: .5rem 0 0; color: #b3b3b3; }
+</style></head>
+<body><main>
+<h1>前端产物缺失</h1>
+<p>宿主只托管 <code>ui/dist</code>，而它还没有构建。</p>
+<p>请先构建 UI：<code>pnpm --dir plugins/remote-control/ui install &amp;&amp; pnpm --dir plugins/remote-control/ui run build</code></p>
+</main></body>
+</html>
+`
 /** Content types for the few extensions a Vite bundle produces. */
 const MIME = Object.freeze({
   '.html': 'text/html; charset=utf-8',
@@ -414,6 +443,236 @@ function readAsset (pathname) {
 }
 
 /**
+ * @param pathname - the request path.
+ * @returns whether the path belongs to the API surface (`/api` and everything under it).
+ *
+ * API paths are answered by the JSON routes below, so the static half must never claim one — not
+ * even as an SPA shell, because a client that asked for data would then parse a page as JSON.
+ */
+function isApiPath (pathname) {
+  return pathname === '/api' || pathname.startsWith('/api/')
+}
+
+/**
+ * @param pathname - the request path.
+ * @returns whether a *missing* path should fall back to the SPA shell.
+ *
+ * The fallback rules, in the order they are decided:
+ *   1. `/api/*` and `/healthz` never fall back — they are not documents.
+ *   2. A path that carries a file extension (`/assets/x.js`) never falls back: answering HTML for a
+ *      missing script makes the browser parse the page as JS and log a syntax error that points at
+ *      the wrong problem. It gets a plain 404 instead.
+ *   3. Everything else (`/`, `/files`, `/w/<id>` …) falls back to `index.html`, which is what lets a
+ *      history-mode route be opened directly.
+ *   4. Containment is not decided here: `readAsset` still refuses any path outside `DIST_ROOT`.
+ */
+function isSpaShell (pathname) {
+  if (isApiPath(pathname) || pathname === '/healthz') return false
+  const last = pathname.slice(pathname.lastIndexOf('/') + 1)
+  return extname(last) === ''
+}
+
+/**
+ * Write one self-contained HTML response.
+ * @param response - the response to fill.
+ * @param status - HTTP status code.
+ * @param body - the complete document.
+ */
+function sendHtmlPage (response, status, body) {
+  response.writeHead(status, {
+    'content-type': MIME['.html'],
+    'cache-control': 'no-store',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+  })
+  response.end(body)
+}
+
+/**
+ * Answer a missing concrete asset. Plain text on purpose: see rule 2 in `isSpaShell`.
+ * @param response - the response to fill.
+ */
+function sendMissingAsset (response) {
+  response.writeHead(404, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  })
+  response.end('not found\n')
+}
+
+/**
+ * @returns the bundle's entry document, or undefined when the build never produced one.
+ */
+function readShell () {
+  try {
+    return readFileSync(DIST_INDEX)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Serve one static request: a file from the bundle, the SPA shell, a 404, or the 503 build notice.
+ * @param request - the incoming request.
+ * @param response - the response to fill.
+ * @param url - the parsed request URL.
+ */
+function serveStatic (request, response, url) {
+  if (!existsSync(DIST_ROOT)) {
+    // 产物缺失只意味着一件事：先构建。宿主不再维护第二套页面。
+    sendHtmlPage(response, 503, MISSING_DIST_HTML)
+    return
+  }
+  const asset = readAsset(url.pathname)
+  const shell = asset === undefined && isSpaShell(url.pathname)
+  const body = shell ? readShell() : asset?.body
+  if (body === undefined) {
+    // dist 在、index.html 不在说明构建没走完，按产物缺失处理比 404 更有指导性。
+    if (shell) sendHtmlPage(response, 503, MISSING_DIST_HTML)
+    else sendMissingAsset(response)
+    return
+  }
+  const type = shell ? MIME['.html'] : asset.type
+  const immutable = asset?.immutable === true
+  // 外壳与 bundle 是这个服务器发出的最大的两样东西，压缩是慢链路能用的前提；带 hash 的资源只压一次。
+  const compress = body.length >= COMPRESS_MIN_BYTES && compressibleType(type) && acceptsGzip(request)
+  const payload = compress
+    ? (immutable ? compressedAsset(url.pathname, body) : gzipSync(body))
+    : body
+  response.writeHead(200, {
+    'content-type': type,
+    ...(compress ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}),
+    'cache-control': shell || !immutable ? 'no-store' : 'public, max-age=31536000, immutable',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    // The shell needs its own bundle plus inline styles; everything else stays blocked.
+    // `frame-src`/`object-src` are for the file browser's previews: a PDF or a video is shown in a
+    // same-origin frame, which `default-src 'none'` would otherwise refuse.
+    'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; frame-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  })
+  response.end(payload)
+}
+
+/** 逐跳首部：只对单段连接有意义，转发时必须丢掉，否则会把 Keep-Alive 语义带进另一条连接。 */
+const HOP_BY_HOP_HEADERS = Object.freeze([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade',
+])
+
+/** 等待 dev server 开始响应的上限；收到响应后就不再计时，流式传输不设限。 */
+const PROXY_FIRST_BYTE_MS = 30_000
+
+/**
+ * @returns the development proxy target read from `RC_DEV_ORIGIN`, or why it was rejected.
+ *
+ * 开发时前端跑在 Vite dev server 上（HMR 只有它有），而浏览器只跟宿主这一个 origin 说话，所以宿主
+ * 把静态 GET 转给 dev server：`RC_DEV_ORIGIN=http://127.0.0.1:5173`。这是开发期开关，生产环境不设
+ * 它，行为与「直接读 ui/dist」完全一致。
+ */
+function resolveDevOrigin () {
+  const raw = typeof process.env.RC_DEV_ORIGIN === 'string' ? process.env.RC_DEV_ORIGIN.trim() : ''
+  if (raw === '') return { origin: undefined, error: undefined }
+  try {
+    const parsed = new URL(raw)
+    // Vite dev server 是明文 http；https 需要另一套 agent，这里直接拒绝，免得配错了看起来却是通的。
+    if (parsed.protocol !== 'http:') return { origin: undefined, error: `只支持 http://（收到 ${parsed.protocol}）` }
+    return { origin: parsed.origin, error: undefined }
+  } catch {
+    return { origin: undefined, error: '不是合法的 URL' }
+  }
+}
+
+/**
+ * @param response - the response to fill.
+ * @param detail - the upstream error, rendered as a hint.
+ */
+function sendProxyFailure (response, detail) {
+  const hint = String(detail ?? '').replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;')
+  sendHtmlPage(response, 502, `<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Remote Control — 开发反代失败</title>
+<style>
+  body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #111; color: #e5e5e5;
+         font: 15px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { margin: 0 0 .5rem; font-size: 1.15rem; }
+  code { background: #222; border-radius: 4px; padding: .1rem .35rem; font-size: .875em; }
+  p { margin: .5rem 0 0; color: #b3b3b3; }
+</style></head>
+<body><main>
+<h1>开发反代失败</h1>
+<p>宿主连不上 <code>RC_DEV_ORIGIN</code> 指向的 dev server：${hint === '' ? '连接失败' : hint}</p>
+<p>先在 <code>plugins/remote-control/ui</code> 里跑 <code>pnpm dev</code>；或者去掉这个环境变量，改用 <code>ui/dist</code>。</p>
+</main></body>
+</html>
+`)
+}
+
+/**
+ * Reverse-proxy one static GET to the Vite dev server.
+ *
+ * 生产形态宿主自己读 `ui/dist`；开发形态想用 Vite 的模块热替换，就得把 `/`、`/assets/*`、
+ * `/@vite/client` 这些静态 GET 原样转给 dev server。`/api/*` 不在此列 —— 那是宿主自己的路由，
+ * 转过去页面就没有数据了。
+ *
+ * 转发是流式的（pipe），method 与 headers 原样带过去，dev server 的 status/headers 也原样回来：
+ * 304、重定向、`text/typescript` 都是它自己的语义。这里刻意不套宿主的 CSP —— HMR 客户端需要内联
+ * 脚本和一条指回 dev server 的 WebSocket，`default-src 'none'` 会把它直接掐死。
+ *
+ * 失败处理是这段代码最要紧的部分：dev server 没起是最常见的状态，`httpRequest()` 只会通过 'error'
+ * 事件报出来 —— 必须接住并回 502，否则一个没启动的 Vite 就能把整个 DSH 进程带走。
+ * @param request - the incoming request.
+ * @param response - the response to fill.
+ * @param url - the parsed request URL.
+ * @param devOrigin - the target origin, e.g. `http://127.0.0.1:5173`.
+ */
+function proxyToDev (request, response, url, devOrigin) {
+  /** 出错时的唯一出口：首部已发出就只能断连接（再写首部会抛异常），否则回一页 502。 */
+  const fail = (detail) => {
+    if (response.headersSent) response.destroy()
+    else sendProxyFailure(response, detail)
+  }
+  let target
+  try {
+    target = new URL(`${url.pathname}${url.search}`, devOrigin)
+  } catch {
+    fail('无法拼接目标 URL')
+    return
+  }
+  const headers = { ...request.headers }
+  for (const name of HOP_BY_HOP_HEADERS) delete headers[name]
+  // dev server 按 Host 判断自身 origin（Vite 的 HMR 地址就是这么算的），所以改写成目标主机。
+  headers.host = target.host
+  const upstream = httpRequest(target, { method: request.method, headers }, (upstreamResponse) => {
+    // 首部已经到了，之后的闲置是流式传输，不该再按「无响应」计时。
+    upstream.setTimeout(0)
+    if (response.headersSent) {
+      upstreamResponse.destroy()
+      return
+    }
+    const forwarded = { ...upstreamResponse.headers }
+    for (const name of HOP_BY_HOP_HEADERS) delete forwarded[name]
+    response.writeHead(upstreamResponse.statusCode ?? 502, forwarded)
+    upstreamResponse.on('error', () => {
+      response.destroy()
+    })
+    upstreamResponse.pipe(response)
+  })
+  upstream.on('error', (error) => {
+    // 连接被拒、DNS 失败、被重置、首字节超时…… 一律 502，绝不让它变成未捕获异常。
+    fail(String(error?.message ?? error))
+  })
+  upstream.setTimeout(PROXY_FIRST_BYTE_MS, () => {
+    upstream.destroy(new Error(`dev server 在 ${String(PROXY_FIRST_BYTE_MS / 1000)} 秒内没有响应`))
+  })
+  // 浏览器提前离开时把上游一起掐掉，否则 dev server 那边的连接会一直挂着。
+  response.on('close', () => {
+    upstream.destroy()
+  })
+  upstream.end()
+}
+
+/**
  * List the deployment's workspaces so the sidebar can group Sessions the way the desktop does.
  * @param ctx - Host context.
  * @returns `{ id, title, path, sessionIds }` per workspace.
@@ -500,7 +759,14 @@ function promptContentOf (body) {
 export function apply (ctx, config) {
   const settings = resolveConfig(config)
   const secret = resolveToken(settings.token)
-  const legacyPage = readFileSync(PAGE_PATH, 'utf8')
+  // 开发形态的开关：设了 RC_DEV_ORIGIN 就把静态 GET 反代给 Vite dev server，没设就直接读 ui/dist。
+  // 解析失败只告警不抛错 —— 一个配错的环境变量不该让整个插件挂掉。
+  const dev = resolveDevOrigin()
+  if (dev.error !== undefined) {
+    ctx.logger?.warn?.(`[remote-control] RC_DEV_ORIGIN 已忽略：${dev.error}`)
+  } else if (dev.origin !== undefined) {
+    ctx.logger?.info?.(`[remote-control] dev 模式：静态 GET 反代到 ${dev.origin}，/api/* 仍由宿主回答`)
+  }
   /** Live SSE clients. */
   const clients = new Set()
   /** Pending questions, keyed by tool-call id. */
@@ -752,30 +1018,14 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
     const authorized = secretMatches(secret.token, presentedSecret(request))
     const json = (status, body, headers) => sendJson(response, status, body, headers)
 
-    if (request.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/healthz') {
-      // The built SPA is the primary UI; the legacy page is the fallback when it is absent.
-      const asset = readAsset(url.pathname)
-      const isShellRequest = url.pathname === '/' || url.pathname === '/index.html' || asset === undefined
-      const body = isShellRequest ? (existsSync(DIST_INDEX) ? readFileSync(DIST_INDEX) : Buffer.from(legacyPage, 'utf8')) : asset.body
-      const type = isShellRequest ? MIME['.html'] : asset.type
-      // The bundle and the shell are the two largest things this server sends, so compression is what
-      // makes a slow link usable at all. Immutable assets are compressed once and remembered.
-      const compress = body.length >= COMPRESS_MIN_BYTES && compressibleType(type) && acceptsGzip(request)
-      const payload = compress
-        ? (asset?.immutable === true ? compressedAsset(url.pathname, body) : gzipSync(body))
-        : body
-      response.writeHead(200, {
-        'content-type': type,
-        ...(compress ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}),
-        'cache-control': isShellRequest || asset?.immutable !== true ? 'no-store' : 'public, max-age=31536000, immutable',
-        'referrer-policy': 'no-referrer',
-        'x-content-type-options': 'nosniff',
-        // The shell needs its own bundle plus inline styles; everything else stays blocked.
-        // `frame-src`/`object-src` are for the file browser's previews: a PDF or a video is shown in a
-        // same-origin frame, which `default-src 'none'` would otherwise refuse.
-        'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; frame-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      })
-      response.end(payload)
+    if (request.method === 'GET' && !isApiPath(url.pathname) && url.pathname !== '/healthz') {
+      // 开发形态：静态 GET 全部交给 Vite dev server（前端热更新），/api/* 仍由宿主回答；
+      // 生产形态没有 RC_DEV_ORIGIN，直接读 ui/dist。
+      if (dev.origin !== undefined) {
+        proxyToDev(request, response, url, dev.origin)
+        return
+      }
+      serveStatic(request, response, url)
       return
     }
     if (request.method === 'GET' && url.pathname === '/healthz') {
@@ -809,7 +1059,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (!url.pathname.startsWith('/api/')) {
+    if (!isApiPath(url.pathname)) {
       json(404, { error: 'not found' })
       return
     }
