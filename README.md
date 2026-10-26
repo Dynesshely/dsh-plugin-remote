@@ -34,7 +34,8 @@ and every request is gated by a token you own.
 - **Model control.** A picker with real brand marks, plus a catalogue browser showing context windows and
   available reasoning effort.
 - **Balance and usage.** One card fed either by an aggregated gateway endpoint or by per-vendor API keys.
-- **Restart or quit DSH** from the page, through an out-of-process helper that outlives the app.
+- **Restart or quit DSH** from the page: the desktop shell's own recovery dialog, with the 「重启」 button
+  confirmed automatically on Windows (opt out with `RC_AUTO_CONFIRM_RESTART=0`).
 - **Pictures that actually load.** A same-origin image proxy resolves both real URLs and workspace paths,
   with click-to-zoom.
 - **Built for a phone.** Glass UI, prompt rail, lazy-rendered transcript, and scroll compensation so
@@ -133,6 +134,25 @@ export RC_DEV_ORIGIN=http://127.0.0.1:5173
 没起或连不上时宿主回 502 而不是崩溃。反代出来的静态路径与普通静态资源一样不校验 token，它只是
 开发开关，不要在生产上设置。用手机访问时 HMR 的 WebSocket 由浏览器直连 dev server，所以 Vite
 也要监听一个设备能访问到的地址（`server.host`）。
+
+### 重启与退出（自动确认）
+
+`POST /api/dsh/restart` 在桌面端只做一件事：发一条 `fatal`，请 Electron 外壳弹出官方恢复对话框
+（「DeepSeek Harness 无法使用 → 退出 / 重启 / 禁用第三方插件并重启」）。宿主**不自己退出**，所以
+窗口不会掉进「重新连接中…」。
+
+默认会**自动点下「重启」**：Host 在发 `fatal` 之前以 detached 方式启动
+`host/confirm-restart.ps1`（仅 Windows），它先等 1.5 秒，再用 UI Automation 轮询 60 秒 —— 窗口标题
+必须同时包含 `DeepSeek Harness` 与 `无法使用`，按钮文案必须**精确等于**「重启」，并且先把窗口恢复
+置顶（`ShowWindow` + `SetForegroundWindow` + `AttachThreadInput` 绕行 + `SetWindowPos(HWND_TOPMOST)`）
+才 `InvokePattern.Invoke()`。找不到窗口、找不到按钮、Invoke 抛错或 PowerShell 不可用都只写日志后安静
+退出：不模拟键盘，也绝不点「禁用第三方插件」（那会禁用本插件）。
+
+- **关闭自动确认**：`RC_AUTO_CONFIRM_RESTART=0`（不设置或 `1` 为开启）。关闭后只弹框，等人在电脑前点。
+- `POST /api/dsh/exit` 不自动点任何按钮：用户说「退出」就只弹框自己选，避免语义冲突。
+- 助手只往 `~/.dsh/remote-control/relaunch.log` 追加带时间戳的日志。
+- 没有 Electron 外壳的部署（`dsh web`）走另一条路：官方 `appExit` 优雅退出，重启时由
+  `host/relaunch.mjs` 等旧监听器释放后再拉起新实例。
 
 ### Run the tests
 
