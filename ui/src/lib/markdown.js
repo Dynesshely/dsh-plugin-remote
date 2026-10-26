@@ -21,6 +21,16 @@ import { marked } from './marked-setup.js'
  */
 const PROMOTABLE = /(!\[[^\]]*\]\([^)]*\))|(`[^`]*`)|(https?:\/\/[^\s)"'<>]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif)(?:\?[^\s)"'<>]*)?)|((?:[A-Za-z]:[\\/]|[^\s:`"'<>|]+[\\/])[^\s"'<>|]*?\.(?:png|jpe?g|gif|webp|svg|bmp|avif))/giu
 
+/**
+ * 单行长度闸门：超过这个字符数就整行跳过 promote 处理。
+ *
+ * `PROMOTABLE` 末支是 `[^\s:"'<>|]+[\\/]` 后面接惰性 `[^\\s"'<>|]*?\\.(?:png|…)`。惰性量词在
+ * 无空格、无引号、又含 `/` 的超长单行（内联 base64 data URL、一长串 URL）上会退化成 O(n²)：
+ * 每个起点都要把剩下的字符扫一遍再回溯，20k 字符约 1s，100k 级直接僵死主线程。正常 markdown
+ * 里一行图片引用不可能有 2000 字符，所以超长行原样保留，不冒这个风险。
+ */
+const MAX_PROMOTE_LINE = 2000
+
 /** @returns the last path segment, used as the alt text. */
 function baseName (value) {
   const parts = String(value).split(/[\\/]/u)
@@ -47,6 +57,8 @@ export function promoteImageReferences (text) {
         return line
       }
       if (inFence) return line
+      // 闸门必须放在 replace 之前：正则一旦跑起来，卡顿就已经花掉了（见 MAX_PROMOTE_LINE 的说明）。
+      if (line.length > MAX_PROMOTE_LINE) return line
       return line.replace(PROMOTABLE, (match, existing, code, url, file) => {
         if (existing !== undefined || code !== undefined) return match
         const source = url !== undefined ? url : file

@@ -293,6 +293,29 @@ async function mutate (api, rootInfo, body) {
 }
 
 /**
+ * 读取原始请求体，带上限。
+ *
+ * 上传路由的请求体就是文件字节本身，所以不能走 `readJson`：那会把整段 base64 正文先拼成字符串
+ * 再 JSON.parse，宿主和页面各吃一次这份内存。超过上限立刻抛 `body too large`，调用方回 413。
+ * 先看 `content-length` 是为了在客户端老实申报体积时直接拒绝，不必先把 20MB 收进内存。
+ * @param request - 请求。
+ * @param limit - 允许的最大字节数。
+ * @returns 请求体字节。
+ */
+async function readBuffer (request, limit) {
+  const declared = Number(request.headers['content-length'] ?? Number.NaN)
+  if (Number.isFinite(declared) && declared > limit) throw new Error('body too large')
+  const chunks = []
+  let total = 0
+  for await (const chunk of request) {
+    total += chunk.length
+    if (total > limit) throw new Error('body too large')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+/**
  * Handle the file routes.
  * @param api - the shell context.
  * @returns whether the request was handled.
@@ -309,6 +332,44 @@ export async function handleFiles (api) {
       return true
     }
     raw(rootInfo, api.url.searchParams.get('path') ?? '', api.request, api.response)
+    return true
+  }
+  // 二进制上传：请求体就是文件字节，绕开 data URL + JSON 那一整条主线程上的字符串路径。
+  // 旧写法（`action: 'upload'` 加 data URL）保留在 `mutate` 里，老页面/旧链接照旧可用。
+  if (method === 'POST' && pathname === '/api/files/upload') {
+    const workspaceId = api.url.searchParams.get('workspaceId') ?? ''
+    const rootInfo = await resolveRoot(api, workspaceId)
+    if (rootInfo === undefined) {
+      api.json(404, { error: '没有可浏览的工作区' })
+      return true
+    }
+    const target = inside(rootInfo.root, api.url.searchParams.get('path') ?? '')
+    if (target === undefined) {
+      api.json(400, { error: '路径超出了工作区' })
+      return true
+    }
+    if (target === rootInfo.root) {
+      api.json(400, { error: '不能覆盖工作区根目录' })
+      return true
+    }
+    let bytes
+    try {
+      bytes = await readBuffer(api.request, MAX_UPLOAD_BYTES)
+    } catch (error) {
+      if (String(error?.message ?? error) === 'body too large') {
+        api.json(413, { error: '文件超过 24 MB' })
+      } else {
+        api.json(400, { error: '读取上传内容失败' })
+      }
+      return true
+    }
+    try {
+      writeFileSync(target, bytes)
+    } catch (error) {
+      api.json(500, { error: String(error?.message ?? error) })
+      return true
+    }
+    api.json(200, { ok: true })
     return true
   }
   if (method !== 'GET' && method !== 'POST') return false

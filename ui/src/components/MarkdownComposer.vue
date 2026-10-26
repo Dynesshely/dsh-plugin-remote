@@ -167,6 +167,23 @@ function highlightCode (marks, code, codeStart, info) {
 }
 
 /**
+ * 巨型围栏的判定阈值：行数或字符数任一超过，就不再整块处理。
+ *
+ * 粘贴 2000 行代码块之后，`buildDecorations` 每次按键/光标移动都要对整块 `sliceString` +
+ * `hljs.highlight`，并给每一行建一个 `Decoration.line` —— 那是数百毫秒到数秒的同步任务，
+ * 输入框直接假死。超过阈值的块只处理与视口相交的行，于是 decoration 数量被一屏行数界住。
+ */
+const BIG_FENCE_LINES = 120
+const BIG_FENCE_CHARS = 8000
+/**
+ * 超阈值围栏里，单次交给 highlight.js 的字符上限。
+ *
+ * 一屏也可能是「一行几十万字符」的超长行，此时行数限制救不了 hljs；超过上限就只保留代码块
+ * 底色，不再着色 —— 宁可少一层颜色，也不能让一次滚动重建再卡住输入。
+ */
+const VISIBLE_HIGHLIGHT_CHARS = 20_000
+
+/**
  * Build the decorations for the visible document.
  * @param editorView - the editor view.
  * @returns the decoration set.
@@ -176,6 +193,8 @@ function buildDecorations (editorView) {
   const selection = state.selection.main
   const caretLine = state.doc.lineAt(selection.head).number
   const marks = []
+  /** 已经加过代码块底色的行（`line.from`）：同一围栏可能落在多个 visibleRanges 里被重复访问。 */
+  const fenceLines = new Set()
   /** True while walking a fenced block's subtree, whose fence marks are handled below. */
   let inFence = false
 
@@ -233,8 +252,15 @@ function buildDecorations (editorView) {
           const blockEditing = editing(start, end)
           const infoNode = node.node.getChild('CodeInfo')
           const info = infoNode === null ? '' : state.doc.sliceString(infoNode.from, infoNode.to).trim()
-          for (let number = firstLine; number <= lastLine; number++) {
+          // 位置偏移就是 UTF-16 码元数，拿它当字符数量级足够判断「这块是不是大到不能整块处理」。
+          const big = lastLine - firstLine + 1 > BIG_FENCE_LINES || end - start > BIG_FENCE_CHARS
+          // 大块只装饰与当前可见范围相交的行：滚出视口的行不建对象，decoration 数量因此有界。
+          const fromLine = big ? Math.max(firstLine, state.doc.lineAt(from).number) : firstLine
+          const toLine = big ? Math.min(lastLine, state.doc.lineAt(to).number) : lastLine
+          for (let number = fromLine; number <= toLine; number++) {
             const line = state.doc.line(number)
+            if (fenceLines.has(line.from)) continue
+            fenceLines.add(line.from)
             const classes = ['rc-md-codeblock']
             if (number === firstLine) classes.push('rc-md-codeblock-first')
             if (number === lastLine) classes.push('rc-md-codeblock-last')
@@ -248,10 +274,17 @@ function buildDecorations (editorView) {
               marks.push(Decoration.replace({ widget }).range(line.from, line.to))
             }
           }
-          if (bodyLast >= bodyFirst) {
-            const codeStart = state.doc.line(bodyFirst).from
-            const code = state.doc.sliceString(codeStart, state.doc.line(bodyLast).to)
-            highlightCode(marks, code, codeStart, info === '' ? undefined : info)
+          // 高亮同样只取与视口相交的正文行：`sliceString` 和 hljs 的输入都随之有界，滚动时由
+          // ViewPlugin 的 viewportChanged 分支重新计算这一段。
+          const bodyFrom = Math.max(bodyFirst, fromLine)
+          const bodyTo = Math.min(bodyLast, toLine)
+          if (bodyTo >= bodyFrom) {
+            const codeStart = state.doc.line(bodyFrom).from
+            const code = state.doc.sliceString(codeStart, state.doc.line(bodyTo).to)
+            // 一屏也可能是一行几十万字符的超长行：超过上限就只留底色，不再交给 hljs。
+            if (!big || code.length <= VISIBLE_HIGHLIGHT_CHARS) {
+              highlightCode(marks, code, codeStart, info === '' ? undefined : info)
+            }
           }
           inFence = true
           return

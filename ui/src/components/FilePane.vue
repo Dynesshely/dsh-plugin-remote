@@ -426,19 +426,69 @@ const marqueeStyle = computed(() => {
   }
 })
 
+/**
+ * @returns 失败响应里的可读原因；正文不是 JSON 时退回状态码。
+ */
+async function failureText (response) {
+  try {
+    const payload = await response.json()
+    if (typeof payload?.error === 'string' && payload.error !== '') return payload.error
+  } catch {
+    /* 代理截断或空正文：退回状态码即可，不要再抛一次错把真正的原因盖掉 */
+  }
+  return `HTTP ${String(response.status)}`
+}
+
+/**
+ * 上传一个文件：请求体直接是 `File` 对象。
+ *
+ * 旧实现先 `readAsDataURL`（12MB 文件约 16MB base64 字符串）再 `JSON.stringify` 交给 `api()`，
+ * 这两步都在主线程上跑，几百毫秒起步，还要多占几十 MB 临时内存。改用 `fetch(..., { body: file })`
+ * 后字节由浏览器直接流式发出，页面不经过 base64、也不拼 JSON。路径仍交给宿主用 `inside()` 校验。
+ * @param file - 待上传的文件。
+ */
+async function uploadOne (file) {
+  const target = path.value === '' ? file.name : `${path.value}/${file.name}`
+  const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
+  let response
+  try {
+    response = await fetch(`/api/files/upload?${query.toString()}`, {
+      method: 'POST',
+      // 自定义头让跨源请求必须走预检，宿主不会放行；同源请求不受影响。
+      headers: { 'x-rc': '1' },
+      body: file,
+      signal: AbortSignal.timeout(120_000),
+    })
+  } catch (problem) {
+    if (problem?.name === 'TimeoutError') throw new Error('请求超时，请重试')
+    throw new Error('无法连接到宿主，请检查网络')
+  }
+  if (response.status === 401) throw new Error('登录已失效，请重新打开带令牌的链接')
+  if (!response.ok) throw new Error(await failureText(response))
+}
+
 /** Upload files into the current directory. */
 async function upload (input) {
   const files = Array.from(input?.files ?? [])
   input.value = ''
-  for (const file of files) {
-    const data = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(String(reader.result ?? ''))
-      reader.onerror = () => reject(new Error('读取失败'))
-      reader.readAsDataURL(file)
-    })
-    const target = path.value === '' ? file.name : `${path.value}/${file.name}`
-    await mutate('upload', { path: target, data })
+  if (files.length === 0) return
+  busy.value = 'upload'
+  error.value = ''
+  /** 第一个失败文件的原因；一个失败不影响其余文件，最后统一报出来。 */
+  let failure = ''
+  try {
+    for (const file of files) {
+      try {
+        await uploadOne(file)
+      } catch (problem) {
+        if (failure === '') failure = `${file.name} 上传失败：${String(problem?.message ?? problem)}`
+      }
+    }
+  } finally {
+    // 一批只刷新一次列表：多文件上传不必每个文件都重建一遍目录。
+    await open(path.value)
+    if (failure !== '') error.value = failure
+    busy.value = ''
   }
 }
 
