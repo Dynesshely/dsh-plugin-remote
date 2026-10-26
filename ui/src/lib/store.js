@@ -69,6 +69,16 @@ export const state = reactive({
   streamDropped: 0,
   /** foldStream 抛异常的累计次数；坏帧被跳过，页面靠这个数字说明发生过几次。 */
   streamErrors: 0,
+  /**
+   * SSE 自动重连的次数，以及最近一次收到 `host hello` 的时间戳（毫秒，0 表示尚未连上）。
+   *
+   * 纯可观测字段：EventSource 断线会自己重连，宿主每接受一条新连接都会立刻重发整份快照，所以
+   * 「没发消息却重新载入」这类症状到底是重连造成的还是别的原因，先看这两个数。
+   */
+  streamReconnects: 0,
+  lastHelloAt: 0,
+  /** 因「快照与当前窗口一致/更旧」被整个跳过的重连快照数量，用来确认去重真的生效。 */
+  snapshotSkips: 0,
   actionError: '',
   models: { groups: [], defaultSelection: undefined },
   selection: undefined,
@@ -551,8 +561,10 @@ export async function loadState () {
       state.sessions = sessions
     }
     state.workspaces = payload.workspaces ?? []
-    state.pending = payload.pending ?? { questions: [], approvals: [] }
-    if (payload.telemetry !== undefined) state.telemetryBySession = payload.telemetry
+    // 两处都「先比指纹再换对象」：`pending` 被每一行消息读（判断这行是不是待回答问题），换一次
+    // 对象就是整段转写重算；`telemetryBySession` 换一次则要把整份嵌套对象重新包成响应式代理。
+    installPending(payload.pending)
+    if (payload.telemetry !== undefined) installTelemetry(payload.telemetry)
     state.unauthorized = false
     state.bootError = ''
     state.booted = true
@@ -726,10 +738,19 @@ function finishSessionLoad () {
   state.sessionFailed = false
 }
 
-/** Try the current Session again after a failed or timed-out load. */
+/**
+ * 重试当前会话。
+ *
+ * 分两种：真正载入失败（或窗口里还没有内容）要重新加载整份快照；只是流断了则只重新打开连接，
+ * 免得一次网络抖动把整段转写清空重建。
+ */
 export async function retrySession () {
   const sessionId = state.selected
   if (sessionId === undefined) return
+  if (state.events.length > 0 && state.sessionFailed !== true) {
+    reopenStream()
+    return
+  }
   state.sessionFailed = false
   await selectSession(sessionId)
 }
@@ -747,6 +768,13 @@ export async function selectSession (sessionId) {
     cancelAnimationFrame?.(streamFlush)
     streamFlush = undefined
   }
+  // 没来得及折叠的事件、以及没拼完的分片快照同样属于上一个会话：切换后一律丢掉。
+  pendingEvents = []
+  if (pendingFlush !== undefined) {
+    cancelAnimationFrame?.(pendingFlush)
+    pendingFlush = undefined
+  }
+  pendingSnapshot = undefined
   state.sessionLoading = true
   state.sessionSlow = false
   state.sessionFailed = false
@@ -783,26 +811,65 @@ export async function selectSession (sessionId) {
     Object.assign(state.telemetry, snapshot, { running: selectedSession.value?.running === true })
   }
   source?.close()
-  source = openStream(sessionId, {
+  source = openStream(sessionId, streamHandlers())
+  await Promise.all([loadPermissions(sessionId), refreshSelection()])
+}
+
+/**
+ * @returns 交给 `openStream` 的帧处理器。
+ *
+ * 抽成工厂是因为「切换会话」和「只重连」要用同一套处理器，两条路径的差别只在会话状态怎么重置。
+ */
+function streamHandlers () {
+  return {
     onFrame: handleFrame,
-    onPending: (pending) => { state.pending = pending },
+    onPending: installPending,
     onSessions: (payload) => {
       // The payload also carries the pinned/archived sets, which is how a desktop-side pin shows up here.
       const sessions = Array.isArray(payload) ? payload : (payload?.sessions ?? [])
+      if (Array.isArray(payload) === false) installManagement(payload)
+      // 与 `loadState` 同一套指纹守卫：侧栏画的所有东西都没变时整条广播直接丢弃，不为一次状态广播
+      // 换掉数组和每一行对象、再重排一遍（几百个会话时那是几十毫秒的无谓 patch）。
+      const fingerprint = sessionFingerprint(sessions, state.pinnedSessionIds, state.archivedSessionIds)
+      if (fingerprint === state.sessionFingerprint) return
+      state.sessionFingerprint = fingerprint
       const known = new Map(state.sessions.map((session) => [session.id, session]))
       state.sessions = sessions.map((session) => ({ ...session, workspaceId: known.get(session.id)?.workspaceId }))
-      if (Array.isArray(payload) === false) installManagement(payload)
       refreshSoon()
     },
     onError: (message) => {
+      // 断线不重新 selectSession：EventSource 自己会重连，宿主在新连接上重发一份快照，由 handleFrame
+      // 的对账决定跳过/追加/替换。这里只收尾状态，绝不整表重载。
+      pendingSnapshot = undefined
       state.streamError = message
       // A failed stream is not a pending one; the note explains it, and the reader gets a retry.
       finishSessionLoad()
       if (state.events.length === 0) state.sessionFailed = true
     },
-    onOpen: () => { state.streamError = '' },
-  })
-  await Promise.all([loadPermissions(sessionId), refreshSelection()])
+    onOpen: (info) => {
+      state.streamError = ''
+      // `hello` 每建立一条新连接都会来一次：第一次是首连，之后每次都是浏览器的自动重连（宿主会立刻
+      // 重发整份快照），所以这两个数就是「没操作却重新载入」的第一手证据。
+      if (typeof info?.at === 'number') state.lastHelloAt = info.at
+      if (Number(info?.reconnects) > 0) state.streamReconnects += 1
+    },
+  }
+}
+
+/**
+ * 只重新打开流连接，不重载会话。
+ *
+ * 流错误横幅上的「重试」过去直接走 `selectSession`：清空 events、`resetTranscriptCache()`、亮骨架屏，
+ * 再等一份新快照 —— 那是第二条真正的整表重载路径，而断线重连的窗口里读者很容易点到它。断线并不
+ * 意味着历史失效，需要的只是重新订阅：保留现有转写，只换一条连接。
+ */
+export function reopenStream () {
+  const sessionId = state.selected
+  if (sessionId === undefined) return
+  state.streamError = ''
+  pendingSnapshot = undefined
+  source?.close()
+  source = openStream(sessionId, streamHandlers())
 }
 
 /**
@@ -1019,29 +1086,139 @@ function flushStreams () {
   if (pendingStreams.length > 0) streamFlush = nextFrame(flushStreams)
 }
 
-function handleFrame (frame) {
-  if (frame === null || typeof frame !== 'object') return
-  if (frame.type === 'snapshot') {
-    pendingEvents = []
-    trackSnapshot(frame)
-    state.events = (frame.records ?? [])
-      .filter((record) => record?.type === 'event')
-      .map((record) => record.event)
-    // 快照是宿主按窗口给的整表，这里不裁剪（裁剪只发生在追加路径上），只把上一次会话的裁剪标志复位。
-    state.eventsTrimmed = false
-    resetTranscriptCache()
-    // A chunked snapshot is only complete once the last chunk says so; an unchunked one is complete
-    // immediately (an earlier Host sent exactly one snapshot frame).
-    if (frame.last !== false) finishSessionLoad()
+/** @returns 一帧快照/分片携带的 durable 事件。 */
+function eventsOf (frame) {
+  return (Array.isArray(frame?.records) ? frame.records : [])
+    .filter((record) => record?.type === 'event')
+    .map((record) => record.event)
+}
+
+/**
+ * @returns 事件窗口的指纹：条数 + 首尾 `seq`。
+ *
+ * 事件日志按 `seq` 追加、从不原地改写，所以「条数 + 首尾 seq 相同」就是同一段窗口。比三个数字
+ * 远比逐条比对便宜，而「同一段历史」正是可以安全跳过整表替换的前提。
+ */
+function eventsFingerprint (events) {
+  if (events.length === 0) return '0'
+  return `${String(events.length)}:${String(events[0]?.seq)}:${String(events[events.length - 1]?.seq)}`
+}
+
+/**
+ * 决定「又收到一份快照」该怎么落地。
+ *
+ * 现场：EventSource 掉线后浏览器会自动重连，宿主在新连接上立刻重发整份窗口快照（见 index.js 的
+ * `pumpSession`）。旧实现对此无条件 `state.events = 快照数组` + `resetTranscriptCache()`，几千行
+ * 的会话于是整表重建、每行重跑 markdown 与高亮 —— 读者只是打了几个字，页面却像重新载入了一遍，
+ * 大会话上这一次就能把主线程卡住数百毫秒到数秒。
+ * @param current - 内存里已有的事件窗口。
+ * @param incoming - 快照里的完整事件窗口（必须是完整的：分片会先拼齐再进来）。
+ * @returns `same`（同一窗口或当前已经更全，什么都不做）、`append`（只多出尾部，就地追加）、
+ *   `replace`（窗口确实变了，只能整表替换）。
+ */
+function reconcileSnapshot (current, incoming) {
+  if (incoming.length === 0) {
+    // 空快照：正等着首次快照的加载态必须走替换路径收尾，否则会一直停在 loading 直到超时。
+    return current.length === 0 && state.sessionLoading !== true ? 'same' : 'replace'
+  }
+  if (current.length === 0) return 'replace'
+  if (eventsFingerprint(current) === eventsFingerprint(incoming)) return 'same'
+  const currentLast = Number(current[current.length - 1]?.seq)
+  const incomingFirst = Number(incoming[0]?.seq)
+  const incomingLast = Number(incoming[incoming.length - 1]?.seq)
+  if (!Number.isFinite(currentLast) || !Number.isFinite(incomingFirst) || !Number.isFinite(incomingLast)) {
+    return 'replace'
+  }
+  // 内存里已经覆盖到更后面（重连前刚收到的实时事件，或窗口被裁剪过）：快照没有新内容。
+  if (incomingLast <= currentLast) return 'same'
+  // 尾部更新但开头跳号了：中间那段既不在旧窗口也不在新窗口里，只有整表替换才不丢行。
+  if (incomingFirst > currentLast + 1) return 'replace'
+  return 'append'
+}
+
+/**
+ * 正在等待拼齐的分片快照。
+ *
+ * 只在「窗口里已经有内容、宿主又送来一段分片快照（`last === false`）」时出现：先攒着，等最后
+ * 一段到齐后一次性对账。这样做是因为拿一段残缺窗口去和当前窗口比较会误判 —— 旧窗口可能被当成
+ * 「更旧」而跳过，随后剩余的 chunk 又被逐段追加，既重复又乱序。
+ */
+let pendingSnapshot
+
+/** 整表替换：唯一会重建转写缓存、并置加载态的路径（真正的窗口变化或首次加载）。 */
+function replaceEvents (frame, incoming) {
+  pendingEvents = []
+  trackSnapshot(frame)
+  state.events = incoming
+  // 快照是宿主按窗口给的整表，这里不裁剪（裁剪只发生在追加路径上），只把上一次会话的裁剪标志复位。
+  state.eventsTrimmed = false
+  resetTranscriptCache()
+  // A chunked snapshot is only complete once the last chunk says so; an unchunked one is complete
+  // immediately (an earlier Host sent exactly one snapshot frame).
+  if (frame.last !== false) finishSessionLoad()
+  state.telemetry.running = selectedSession.value?.running === true
+}
+
+/**
+ * 把一份**完整**快照装进状态：能跳过就跳过、能追加就追加，只有窗口真的变了才整表替换。
+ *
+ * 跳过与追加都不碰 `sessionLoading`、不走 `finishSessionLoad`、也不清转写缓存 —— 数组不换、行对象
+ * 不变，Vue 就不会重渲染，滚动位置也不会被重置。
+ * @param frame - 触发它的帧，用于进度与 `last` 判定。
+ * @param incoming - 完整的事件窗口。
+ */
+function applySnapshot (frame, incoming) {
+  const decision = reconcileSnapshot(state.events, incoming)
+  if (decision === 'same') {
+    state.snapshotSkips += 1
+    return
+  }
+  if (decision === 'append') {
+    const boundary = Number(state.events[state.events.length - 1]?.seq)
+    const tail = incoming.filter((event) => Number(event?.seq) > boundary)
+    if (tail.length > 0) {
+      state.events.push(...tail)
+      // 尾部事件可能已经作为实时帧排进了待折叠队列：快照里已有的那些要丢掉，否则会重复插入。
+      const last = Number(tail[tail.length - 1]?.seq)
+      pendingEvents = pendingEvents.filter((event) => {
+        const seq = Number(event?.seq)
+        return !Number.isFinite(seq) || seq > last
+      })
+    }
     state.telemetry.running = selectedSession.value?.running === true
     return
   }
+  replaceEvents(frame, incoming)
+}
+
+function handleFrame (frame) {
+  if (frame === null || typeof frame !== 'object') return
+  if (frame.type === 'snapshot') {
+    pendingSnapshot = undefined
+    const chunk = eventsOf(frame)
+    // 分片快照（last === false）且窗口里已有内容：整份攒起来，等最后一段再对账（见 pendingSnapshot）。
+    // 窗口为空时是真正的会话切换：照旧先画第一段，让内容早一点出现。
+    if (frame.last === false && state.events.length > 0) {
+      pendingSnapshot = { records: chunk }
+      return
+    }
+    applySnapshot(frame, chunk)
+    return
+  }
   if (frame.type === 'snapshot-append') {
+    if (pendingSnapshot !== undefined) {
+      const more = eventsOf(frame)
+      if (more.length > 0) pendingSnapshot.records.push(...more)
+      if (frame.last === true) {
+        const incoming = pendingSnapshot.records
+        pendingSnapshot = undefined
+        applySnapshot(frame, incoming)
+      }
+      return
+    }
+    // 没有攒快照时照旧增量拼接：真正的会话切换会走这条（首段已经替换，剩下的分片直接追加）。
     trackSnapshot(frame)
-    // The rest of a large snapshot, folded as it lands.
-    const more = (frame.records ?? [])
-      .filter((record) => record?.type === 'event')
-      .map((record) => record.event)
+    const more = eventsOf(frame)
     if (more.length > 0) {
       state.events.push(...more)
       // 分片的其余部分同样受上限约束，否则一个超大快照就能把窗口撑到无界。
@@ -1229,14 +1406,78 @@ export async function stageImage (file) {
 /* ---------------------------------------------------------------- session management */
 
 /**
+ * @returns 两个字符串数组是否逐项相同。
+ *
+ * 用来在安装 pinned/archived/pending 这类列表前先比较：相同就不换数组，免得侧栏或待办面板为一个
+ * 内容没变的广播重渲染。
+ */
+function sameStringArray (left, right) {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (String(left[index]) !== String(right[index])) return false
+  }
+  return true
+}
+
+/**
  * Install the pinned/archived sets a state or `sessions` payload carries.
  * @param payload - a `/api/state` reply or a `sessions` SSE payload.
  */
 function installManagement (payload) {
   if (payload === null || payload === undefined) return
-  if (Array.isArray(payload.pinnedSessionIds)) state.pinnedSessionIds = payload.pinnedSessionIds.map(String)
-  if (Array.isArray(payload.archivedSessionIds)) state.archivedSessionIds = payload.archivedSessionIds.map(String)
+  // 列表内容相同时不赋值：`groupedSessions` 依赖这两个数组，换一次新数组就要整段重排一遍。
+  if (Array.isArray(payload.pinnedSessionIds)) {
+    const pinned = payload.pinnedSessionIds.map(String)
+    if (!sameStringArray(state.pinnedSessionIds, pinned)) state.pinnedSessionIds = pinned
+  }
+  if (Array.isArray(payload.archivedSessionIds)) {
+    const archived = payload.archivedSessionIds.map(String)
+    if (!sameStringArray(state.archivedSessionIds, archived)) state.archivedSessionIds = archived
+  }
   if (typeof payload.managed === 'boolean') state.managed = payload.managed
+}
+
+/** 上一次装进 `state.pending` 的载荷指纹。 */
+let pendingSignature = ''
+/** 上一次装进 `state.telemetryBySession` 的载荷指纹。 */
+let telemetrySignature = ''
+
+/**
+ * @returns 一个载荷的稳定指纹。
+ *
+ * 这里可以放心用 `JSON.stringify`：两个载荷都只由标量和短字符串组成（待办几条、计数几十个），
+ * 字符串化一两万个字符约几十微秒；而「换掉对象」的代价是把它们重新包成响应式代理、并让读取它们的
+ * 面板与每一行消息重算 —— 那才是要省掉的部分。
+ */
+function payloadSignature (value) {
+  try {
+    return value === undefined ? '' : JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 安装待办载荷：内容没变就整条丢弃。
+ * @param pending - `{ questions, approvals }`，可能来自 `/api/state` 或 `pending` 事件。
+ */
+function installPending (pending) {
+  const next = pending ?? { questions: [], approvals: [] }
+  const signature = payloadSignature(next)
+  if (signature === pendingSignature) return
+  pendingSignature = signature
+  state.pending = next
+}
+
+/**
+ * 安装按会话切分的 telemetry 快照：内容没变就不换对象（免得整份嵌套对象重新变成响应式）。
+ * @param bySession - `{ [sessionId]: counters }`。
+ */
+function installTelemetry (bySession) {
+  const signature = payloadSignature(bySession)
+  if (signature === telemetrySignature) return
+  telemetrySignature = signature
+  state.telemetryBySession = bySession
 }
 
 /**

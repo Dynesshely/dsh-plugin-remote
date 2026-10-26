@@ -142,19 +142,29 @@ export function openStream (sessionId, handlers) {
    */
   const queues = new Map()
   let draining = false
+  /**
+   * 这条连接是否已被调用方关掉。
+   *
+   * `EventSource.close()` 只停止接收，已经排进队列的帧还会被 drain 继续消费 —— 切换会话之后，旧
+   * 会话的帧就会折进新会话的转写里。这个标志在关闭时清空队列并让消费循环退出，把那条路径截断。
+   */
+  let closed = false
 
   /** Keep draining channel queues until every one of them is empty. */
   const drain = async () => {
-    if (draining) return
+    if (closed || draining) return
     draining = true
     try {
       for (;;) {
+        if (closed) break
         const busy = [...queues.values()].filter((entry) => entry.items.length > 0)
         if (busy.length === 0) break
         for (const entry of busy) {
+          if (closed) break
           const batch = entry.items.splice(0, PARSE_BATCH)
           if (batch.length === 0) continue
           const result = await parser.parse(batch)
+          if (closed) break
           for (const frame of result.frames) {
             try {
               entry.handler(entry.pick === undefined ? frame : entry.pick(frame))
@@ -177,7 +187,7 @@ export function openStream (sessionId, handlers) {
    * @param pick - optional projection applied to each parsed frame.
    */
   const enqueue = (key, handler, payload, pick) => {
-    if (handler === undefined) return
+    if (closed || handler === undefined) return
     let entry = queues.get(key)
     if (entry === undefined) {
       entry = { handler, pick, items: [] }
@@ -187,6 +197,14 @@ export function openStream (sessionId, handlers) {
     if (!draining) void drain()
   }
   const source = new EventSource(`/api/stream?sessionId=${encodeURIComponent(sessionId)}`)
+  /**
+   * 这条连接上收到过多少次 `hello`。
+   *
+   * 宿主每接受一条新连接都会先发 `hello`，然后立刻重发整份会话快照（见 index.js 的 `pumpSession`）。
+   * 所以 hello 次数就是重连次数 + 1，把它交给上层，页面才有办法说明「我什么都没做，为什么它自己
+   * 重新载入了」。
+   */
+  let hellos = 0
   source.addEventListener('frame', (event) => {
     try {
       enqueue('frame', handlers.onFrame, event.data)
@@ -206,10 +224,22 @@ export function openStream (sessionId, handlers) {
     enqueue('stream-error', handlers.onError, event.data, (frame) => frame.message)
   })
   source.addEventListener('hello', () => {
-    handlers.onOpen?.()
+    if (closed) return
+    hellos += 1
+    handlers.onOpen?.({ reconnects: hellos - 1, at: Date.now() })
   })
   source.onerror = () => {
+    // 浏览器会自己重连，所以这里只报状态，不触发任何重新加载：上层拿到消息只更新提示，
+    // 真正的快照去重发生在 store 的 handleFrame 里。
     handlers.onError?.('连接中断，正在重连…')
+  }
+  // 关掉连接时顺手封死队列，见 `closed` 的说明。
+  const nativeClose = source.close.bind(source)
+  source.close = () => {
+    if (closed) return
+    closed = true
+    queues.clear()
+    nativeClose()
   }
   return source
 }

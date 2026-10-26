@@ -11,13 +11,42 @@ const props = defineProps({ item: { type: Object, required: true } })
 
 const expanded = ref(false)
 
-/** Pretty-printed arguments, which are JSON for most tools. */
-const argsText = computed(() => prettyArguments(props.item.args))
+/** 折叠头显示的字符数。 */
+const COLLAPSED_PREVIEW = 96
+/** 展开态做美化前的长度闸门：超过就只显示原文前一段。 */
+const MAX_PRETTY_CHARS = 20_000
+/** 超长参数在展开态仍然显示的原文字符数。 */
+const RAW_PREVIEW_CHARS = 4_000
 
-/** @returns a one-line summary of the arguments for the collapsed header. */
+const rawArgs = computed(() => String(props.item.args ?? ''))
+
+/**
+ * 折叠头的一行摘要。
+ *
+ * 只用原串的前 96 个字符：参数的 JSON 美化（`JSON.parse` + `JSON.stringify(…, null, 2)`）和整串
+ * 空白替换，对 `write`/`edit` 这类带着整篇文件正文的参数是单行 50–200ms，而折叠态只需要开头几个
+ * 词。所以这里不解析、不美化、不跑正则，最多再把开头的空白跳过（循环也只走 96 个字符）。
+ */
 const argsPreview = computed(() => {
-  const text = argsText.value.replace(/\s+/gu, ' ').trim()
-  return text.length <= 96 ? text : `${text.slice(0, 95)}…`
+  const raw = rawArgs.value
+  let start = 0
+  while (start < raw.length && start < COLLAPSED_PREVIEW && raw.charCodeAt(start) <= 32) start += 1
+  const head = raw.slice(start, start + COLLAPSED_PREVIEW)
+  return start + COLLAPSED_PREVIEW < raw.length ? `${head}…` : head
+})
+
+/**
+ * 展开态的完整参数文本。
+ *
+ * 美化只在展开时发生（`argsHtml` 是 computed，模板里的 `v-if="expanded"` 不成立就不会求值），
+ * 而且先过长度闸门：超长参数原文比美化结果更有用，也便宜得多。
+ */
+const argsText = computed(() => {
+  const raw = rawArgs.value
+  if (raw.length > MAX_PRETTY_CHARS) {
+    return `${raw.slice(0, RAW_PREVIEW_CHARS)}\n…（参数过长，仅显示前 ${String(RAW_PREVIEW_CHARS)} 字符）`
+  }
+  return prettyArguments(raw)
 })
 
 // Escaped/highlighted HTML for the expanded body: arguments are JSON for most tools (hinted as such,

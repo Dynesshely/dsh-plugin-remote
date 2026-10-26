@@ -82,9 +82,38 @@ export function imageReferencesIn (text) {
   return found
 }
 
+/**
+ * 单次渲染的字符上限。
+ *
+ * `marked.parse` + `DOMPurify.sanitize` 对整段文本没有任何长度上限：一条 20 万字的助手消息，或
+ * 文件面板里的 512KB `.md` 预览，进渲染波段时单次就是 200–500ms 的同步任务，输入与滚动全部停摆。
+ * 超长内容本来也读不完，所以超过就只渲染前一段，并在末尾说清楚发生了什么。
+ */
+const MAX_RENDER_CHARS = 50_000
+
+/**
+ * @param text - 原始 markdown。
+ * @returns `{ text, omitted }`：真正交给渲染的前缀，以及被省略的字符数。
+ *
+ * 截断点退到最后一个换行，避免把代码围栏或表格从中间切开后渲染成错误的结构；单行超长内容
+ * （压缩过的 JSON、base64）没有换行可退，只能硬切。
+ */
+function clampForRender (text) {
+  if (text.length <= MAX_RENDER_CHARS) return { text, omitted: 0 }
+  const lineEnd = text.lastIndexOf('\n', MAX_RENDER_CHARS)
+  const end = lineEnd > MAX_RENDER_CHARS * 0.8 ? lineEnd : MAX_RENDER_CHARS
+  return { text: text.slice(0, end), omitted: text.length - end }
+}
+
 export function renderMarkdown (text) {
-  const html = marked.parse(promoteImageReferences(text))
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+  const source = String(text ?? '')
+  const clamped = clampForRender(source)
+  const html = marked.parse(promoteImageReferences(clamped.text))
+  const safe = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+  if (clamped.omitted === 0) return safe
+  // 提示拼接在净化之后：它是本模块自己的固定文本，不含任何模型输出，不需要再过一次 DOMPurify。
+  // 后半句给出原文长度，读者才知道自己少看了多少。
+  return `${safe}<p class="rc-md-truncated">内容较长，仅渲染前 ${String(clamped.text.length)} 字符（原文 ${String(source.length)} 字符，已省略 ${String(clamped.omitted)} 字符）</p>`
 }
 
 /** @returns the first line of a possibly long string, trimmed for a collapsed header. */
