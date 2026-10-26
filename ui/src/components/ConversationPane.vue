@@ -145,7 +145,7 @@ watch(settingsOpen, (open) => {
 })
 
 const props = defineProps({ theme: { type: String, default: 'system' } })
-const emit = defineEmits(['toggleSidebar', 'update:theme'])
+const emit = defineEmits(['toggleSidebar', 'toggleFiles', 'update:theme'])
 
 const scroller = ref(null)
 
@@ -336,6 +336,9 @@ onBeforeUnmount(() => {
         :label-class="mobile ? 'hidden' : ''"
         @update:model-value="emit('update:theme', $event)"
       />
+      <button class="icon-btn" type="button" title="右侧栏" @click="emit('toggleFiles')">
+        <AppIcon name="sidebar" :size="15" />
+      </button>
       <button class="icon-btn" type="button" title="设置" @click="settingsOpen = true">
         <AppIcon name="gear" :size="15" />
       </button>

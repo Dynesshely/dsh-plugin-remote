@@ -7,6 +7,7 @@ import { loadMessage, loadPhase, SLOW_AFTER_MS } from './lib/loading.js'
 import AppIcon from './components/AppIcon.vue'
 import SidebarPane from './components/SidebarPane.vue'
 import ConversationPane from './components/ConversationPane.vue'
+import RightPane from './components/RightPane.vue'
 
 const THEME_KEY = 'rc.theme'
 const SIDEBAR_KEY = 'rc.sidebar'
@@ -14,6 +15,12 @@ const SIDEBAR_KEY = 'rc.sidebar'
 const SIDEBAR_WIDTH = '18.5rem'
 
 const drawer = ref(false)
+/** The file browser column; remembered like the other layout choices. */
+const filesOpen = ref(window.localStorage.getItem('rc.files') !== '0')
+/** Width of the file column in rem, remembered because it is tuned once and then expected to stay. */
+const filesWidth = ref(Number(window.localStorage.getItem('rc.filesWidth') ?? '19') || 19)
+/** True while the divider is being dragged, so the width can follow the pointer without animating. */
+const filesResizing = ref(false)
 const sidebar = ref(window.localStorage.getItem(SIDEBAR_KEY) !== '0')
 const theme = ref(window.localStorage.getItem(THEME_KEY) ?? 'system')
 const token = ref('')
@@ -88,6 +95,95 @@ const asideStyle = computed(() => {
     transform: open ? 'translateX(0)' : 'translateX(-110%)',
   }
 })
+
+/** Mirror of `asideStyle` for the right-hand column: same inset, mirrored drawer direction. */
+const filesStyle = computed(() => {
+  const open = filesOpen.value
+  if (!mobile.value) {
+    return {
+      // `relative`, not `static`: the resize handle is absolutely positioned inside this column, and a
+      // static ancestor gives it no containing block — which is why it was invisible and could not be
+      // grabbed. It stays in flow, so the flex layout is unchanged.
+      position: 'relative',
+      width: open ? `${String(filesWidth.value)}rem` : '0rem',
+      padding: open ? '0.5rem' : '0rem',
+      opacity: open ? '1' : '0',
+      overflow: 'hidden',
+      pointerEvents: open ? 'auto' : 'none',
+    }
+  }
+  return {
+    position: 'absolute',
+    top: '0px',
+    bottom: '0px',
+    right: '0px',
+    width: `${String(filesWidth.value)}rem`,
+    padding: '0.5rem',
+    transform: open ? 'translateX(0)' : 'translateX(110%)',
+  }
+})
+
+/**
+ * Start dragging the divider between the transcript and the file column.
+ * @param event - pointerdown on the divider.
+ */
+/** The frame that will apply the pending width, if one is scheduled. */
+let resizeFrame
+/** The latest pointer x, so several events per frame collapse into one write. */
+let resizeX = 0
+
+/** Apply the pending width once per frame instead of once per pointer event. */
+function applyFilesResize () {
+  resizeFrame = undefined
+  const rem = (window.innerWidth - resizeX) / 16 - 0.5
+  filesWidth.value = Math.min(42, Math.max(15, Math.round(rem * 10) / 10))
+}
+
+function startFilesResize (event) {
+  if (mobile.value) return
+  filesResizing.value = true
+  resizeX = event.clientX
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  event.preventDefault()
+}
+
+/**
+ * Follow the pointer while dragging.
+ * @param event - pointermove on the divider.
+ */
+function moveFilesResize (event) {
+  if (!filesResizing.value) return
+  resizeX = event.clientX
+  if (resizeFrame !== undefined) return
+  resizeFrame = requestAnimationFrame(applyFilesResize)
+}
+
+/** Finish the drag and remember the width. */
+function endFilesResize () {
+  if (!filesResizing.value) return
+  filesResizing.value = false
+  if (resizeFrame !== undefined) {
+    cancelAnimationFrame(resizeFrame)
+    resizeFrame = undefined
+    applyFilesResize()
+  }
+  try {
+    window.localStorage.setItem('rc.filesWidth', String(filesWidth.value))
+  } catch {
+    /* a blocked storage keeps the in-memory width */
+  }
+}
+
+/** Show or hide the file browser. On a phone the two columns would fight, so the drawer closes. */
+function toggleFiles () {
+  filesOpen.value = !filesOpen.value
+  if (filesOpen.value) drawer.value = false
+  try {
+    window.localStorage.setItem('rc.files', filesOpen.value ? '1' : '0')
+  } catch {
+    /* a blocked storage keeps the in-memory value */
+  }
+}
 
 function toggleSidebar () {
   if (!mobile.value) {
@@ -254,7 +350,46 @@ async function submitToken () {
         v-model:theme="theme"
         class="min-w-0 flex-1"
         @toggle-sidebar="toggleSidebar"
+        @toggle-files="toggleFiles"
       />
+
+      <!-- Narrow screens give the file browser the whole width, over a dimmed transcript. -->
+      <div
+        v-if="filesOpen && mobile"
+        class="absolute inset-0 z-20 bg-black/30 backdrop-blur-sm"
+        @click="toggleFiles"
+      />
+
+      <!-- The right column keeps its box while closed on desktop, so the width can animate. -->
+      <aside
+        v-if="filesOpen"
+        class="relative z-30 min-h-0 shrink-0"
+        :class="filesResizing ? '' : 'transition-all duration-300 ease-out'"
+        :style="filesStyle"
+      >
+        <!--
+          The divider straddles the gutter: the visible line is 2px, but the grab area is wider and
+          overlaps the padding, because a 6px strip with no resting colour was neither visible nor easy
+          to hit.
+        -->
+        <div
+          v-if="mobile === false && filesOpen"
+          class="group absolute inset-y-0 -left-1 z-40 w-3 cursor-col-resize touch-none"
+          title="拖动调整宽度"
+          @pointerdown="startFilesResize"
+          @pointermove="moveFilesResize"
+          @pointerup="endFilesResize"
+          @pointercancel="endFilesResize"
+        >
+          <!-- A short rounded bar instead of a full-height line, which reads as a seam rather than a grip. -->
+          <span
+            class="absolute top-1/2 left-1/2 h-16 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/15 transition-all duration-150 group-hover:w-1.5 group-hover:bg-blue-500 dark:bg-white/25"
+          />
+        </div>
+        <div class="panel-tight h-full w-full overflow-hidden">
+          <RightPane @close="toggleFiles" />
+        </div>
+      </aside>
     </div>
   </div>
 </template>

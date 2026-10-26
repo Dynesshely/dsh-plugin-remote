@@ -181,6 +181,7 @@ function stabilizeGroup (group) {
     && previous.group.items.every((child, index) => child === group.items[index])
   if (same) return previous.group
   groupCache.set(group.key, { group })
+if (groupCache.size > 4000) groupCache.clear()
   return group
 }
 
@@ -877,6 +878,24 @@ function flushEvents () {
 }
 
 /** Fold one SSE frame into the transcript and the telemetry counters. */
+/**
+ * Streaming frames, batched to one fold per animation frame.
+ *
+ * A running turn emits many assistant-stream frames per second; folding each one synchronously as it
+ * arrived kept the main thread busy for the whole reply, which is what made sending a prompt feel like a
+ * freeze. The frames are still folded one by one, so the result is identical — only the timing changes.
+ */
+let pendingStreams = []
+let streamFlush
+
+/** Fold every queued stream frame, once per frame. */
+function flushStreams () {
+  streamFlush = undefined
+  const frames = pendingStreams
+  pendingStreams = []
+  for (const frame of frames) foldStream(frame)
+}
+
 function handleFrame (frame) {
   if (frame === null || typeof frame !== 'object') return
   if (frame.type === 'snapshot') {
@@ -912,7 +931,8 @@ function handleFrame (frame) {
     return
   }
   if (frame.type === 'assistant-stream') {
-    foldStream(frame.frame)
+    pendingStreams.push(frame.frame)
+    if (streamFlush === undefined) streamFlush = window.requestAnimationFrame(flushStreams)
   }
 }
 
