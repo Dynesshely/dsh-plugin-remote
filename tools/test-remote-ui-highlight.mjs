@@ -67,9 +67,12 @@ check('only objects and arrays count as JSON output', () => {
   assert.equal(looksLikeJson(undefined), false)
 })
 
-check('auto-detection colours real code but leaves prose alone', () => {
+check('without a language hint everything stays plain, and huge inputs are never tokenised', () => {
+  // Auto-detection was removed on purpose: it tried all registered grammars per render and was a
+  // seconds-long main-thread task. Code without a hint must therefore come back unstyled.
   const ps = codeHtml('$files = Get-ChildItem -Path C:\\Temp -Recurse | Where-Object { $_.Length -gt 0 }\nWrite-Host $files.Count')
-  assert.match(ps, /hljs-/u, 'a PowerShell snippet is detected')
+  assert.ok(!ps.includes('hljs-'), 'a PowerShell snippet is returned as plain text without a hint')
+  assert.match(ps, /Get-ChildItem/u, 'the text itself is preserved')
   const prose = codeHtml('The command finished after four seconds and reported no errors at all.')
   assert.ok(!prose.includes('hljs-'), 'ordinary sentences stay plain')
   const oneLiner = codeHtml('total 3')

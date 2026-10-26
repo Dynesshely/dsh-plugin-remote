@@ -874,3 +874,12 @@ body {
 .dark .panel-veil {
   background: rgb(24 24 27 / 0.72) !important;
 }
+
+/* Streaming: a reply arrives dozens of times per second.
+   Repainting a large backdrop-filter area on top of that is what froze the page when the right column
+   was opened mid-reply, so the glass is dropped for the duration. */
+.streaming .panel-tight,
+.streaming .panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

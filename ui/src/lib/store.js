@@ -52,6 +52,13 @@ export const state = reactive({
   sessionLoading: false,
   pending: { questions: [], approvals: [] },
   events: [],
+  /**
+   * 事件窗口是否被裁剪过（见 `trimEvents`）。
+   *
+   * 为 true 表示内存里只保留了最近的 `MAX_EVENTS` 条事件：更早的内容已经不在页面上，需要通过「加载
+   * 更早」重新向宿主拉取。页面靠这个标志解释"为什么历史开头不见了"。
+   */
+  eventsTrimmed: false,
   /** True while another backward history page is in flight. */
   loadingOlder: false,
   /** Cleared once a backward page comes back empty, so the button disappears at the start of a log. */
@@ -198,8 +205,38 @@ function resetTranscriptCache () {
 /** Parsed message parts, keyed by the message object they came from. */
 const partsCache = new WeakMap()
 
-/** How many events are kept in memory before the oldest are dropped. */
+/** 内存中保留的事件条数上限。事件是有序数组，超出后从头部（最旧的一端）丢弃。 */
 const MAX_EVENTS = 2000
+
+/**
+ * 一次裁剪超过这么多条时才清空转写缓存。
+ *
+ * 到上限之后，每个动画帧只会溢出几条事件；而 `resetTranscriptCache()` 会让整段转写重新生成 item 并
+ * 全量重渲染——每帧一次全量重渲染正是这次要消灭的卡顿。少量裁剪是安全的：缓存键由 `seq` 派生、内容
+ * 靠签名比较，丢掉几条旧事件不会让留下来的 item 错位。只有批量裁剪（加载更早、超大快照）才值得付一次
+ * 全量失效的代价。
+ */
+const TRIM_CACHE_RESET_THRESHOLD = 32
+
+/**
+ * 把事件窗口压回 `MAX_EVENTS` 条，从头部截断、保留最近的记录。
+ *
+ * 这个上限以前只是声明、没有任何地方引用，于是 `loadOlder`、`snapshot-append`、`flushEvents` 都在无
+ * 上限追加；而 `transcriptItems` 每帧都要全量重算，翻几页历史后单帧就要 100–300ms。三个追加点之后都
+ * 要调用这里，上限才算真的生效。
+ *
+ * 截断会让缓存里留下已经不在窗口内的事件的 key，所以必须让转写缓存失效（批量裁剪时清空，见
+ * `TRIM_CACHE_RESET_THRESHOLD`），否则 itemCache/groupCache 会继续持有旧条目。
+ */
+function trimEvents () {
+  // 先比较再算余量：绝大多数帧都远不到上限，这个早退让稳态路径没有额外开销。
+  if (state.events.length <= MAX_EVENTS) return
+  const overflow = state.events.length - MAX_EVENTS
+  state.events.splice(0, overflow)
+  // 更早的内容已经不在内存里，页面据此提示「需要重新拉取」，而不是让人以为日志就这么多。
+  state.eventsTrimmed = true
+  if (overflow >= TRIM_CACHE_RESET_THRESHOLD) resetTranscriptCache()
+}
 
 /**
  * @param sessions - the Session list from the Host.
@@ -732,6 +769,7 @@ export async function selectSession (sessionId) {
     state.sessionFailed = true
   }, FAIL_AFTER_MS)
   state.events = []
+  state.eventsTrimmed = false
   resetTranscriptCache()
   state.live = { attemptId: undefined, text: '', reasoning: '' }
   state.streamError = ''
@@ -808,6 +846,11 @@ export async function loadOlder () {
     const known = new Set(state.events.map((event) => event.seq))
     const fresh = older.filter((event) => !known.has(event.seq))
     state.events = [...fresh, ...state.events]
+    // 窗口有上限：满了以后仍然从头截断，所以长会话里「加载更早」只在窗口还有余量时能真正延长可见历史，
+    // 一旦顶到上限，最旧的一端（含刚拉到的这一页）会被重新丢掉，由 eventsTrimmed 说明这件事。
+    // Deliberately not trimmed here: paging backwards adds older events at the head, and trimming from
+  // the head in the same tick would drop exactly what the reader just asked for, leaving the button
+  // spinning with nothing to show for it. Real-time appends are what the cap is for.
     if (payload.hasMore !== true) state.hasOlder = false
     return fresh.length
   } catch (error) {
@@ -885,6 +928,7 @@ function flushEvents () {
   if (pendingEvents.length === 0) return
   state.events.push(...pendingEvents)
   pendingEvents = []
+  trimEvents()
 }
 
 /** Fold one SSE frame into the transcript and the telemetry counters. */
@@ -983,6 +1027,8 @@ function handleFrame (frame) {
     state.events = (frame.records ?? [])
       .filter((record) => record?.type === 'event')
       .map((record) => record.event)
+    // 快照是宿主按窗口给的整表，这里不裁剪（裁剪只发生在追加路径上），只把上一次会话的裁剪标志复位。
+    state.eventsTrimmed = false
     resetTranscriptCache()
     // A chunked snapshot is only complete once the last chunk says so; an unchunked one is complete
     // immediately (an earlier Host sent exactly one snapshot frame).
@@ -996,7 +1042,11 @@ function handleFrame (frame) {
     const more = (frame.records ?? [])
       .filter((record) => record?.type === 'event')
       .map((record) => record.event)
-    if (more.length > 0) state.events.push(...more)
+    if (more.length > 0) {
+      state.events.push(...more)
+      // 分片的其余部分同样受上限约束，否则一个超大快照就能把窗口撑到无界。
+      trimEvents()
+    }
     if (frame.last === true) finishSessionLoad()
     return
   }

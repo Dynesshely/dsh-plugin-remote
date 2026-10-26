@@ -270,7 +270,7 @@ async function submitToken () {
 <template>
   <div
     class="relative h-full"
-    :class="state.lightweight ? 'lightweight' : ''"
+    :class="[state.lightweight ? 'lightweight' : '', state.telemetry.running ? 'streaming' : '']"
     @touchstart.passive="onTouchStart"
     @touchend.passive="onTouchEnd"
   >
@@ -364,7 +364,7 @@ async function submitToken () {
       <aside
         v-if="filesOpen"
         class="relative z-30 min-h-0 shrink-0"
-        :class="filesResizing ? '' : 'transition-all duration-300 ease-out'"
+        :class="filesResizing ? '' : 'transition-[width] duration-300 ease-out'"
         :style="filesStyle"
       >
         <!--

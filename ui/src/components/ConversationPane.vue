@@ -257,11 +257,23 @@ watch([() => transcriptItems.value.length, () => state.selected], async () => {
   syncActivePrompt()
 })
 
-watch([() => transcriptItems.value.length, () => state.live.text], async () => {
+/**
+ * 贴到底部，只在内容真的变了之后调用。
+ *
+ * 读 `scrollHeight` 会强制一次同步布局；原来的 `watch` 里挂了 `state.live.text`，于是流式期间
+ * 每来一个 token 就 nextTick + 强制布局一次，这是滚动发涩的直接来源。现在它跟着流式渲染的
+ * 节流走（400ms 一次），频率降到不足原来的十分之一，读者看不出差别。
+ */
+async function scrollToBottomIfSticky () {
   if (!sticky.value) return
   await nextTick()
   const node = scroller.value
   if (node !== null) node.scrollTop = node.scrollHeight
+}
+
+// 只跟着「新的消息行」贴底；流式文本由下面的渲染回调负责。
+watch(() => transcriptItems.value.length, () => {
+  void scrollToBottomIfSticky()
 })
 
 watch(() => state.selected, async () => {
@@ -269,39 +281,155 @@ watch(() => state.selected, async () => {
   await Promise.all([loadPermissions(state.selected), loadModels()])
 })
 
-/** Live output rendered as markdown, throttled so a fast stream does not re-parse every token. */
+/**
+ * 流式输出渲染成 markdown 的窗口与节流。
+ *
+ * 原来的做法是每 140ms 把**整段** `state.live.text` 重跑一遍 `marked` → 每个围栏再走
+ * highlight.js → `DOMPurify`，再用 `v-html` 整块替换，且没有长度上限。单次成本随字数线性增长，
+ * 触发频率又固定，累计就是平方级：一万五千字、三个代码块时每次 50–150ms、约 7 次/秒，
+ * 主线程基本被这条路径吃满 —— 「一边吐字一边点右侧栏就卡死」正是它。
+ *
+ * 所以：流式期间只解析末尾 `LIVE_WINDOW` 个字符，节流放宽到 `LIVE_INTERVAL`；收流
+ * （`state.telemetry.running` 变 false）的那一帧取消节流、立刻整段渲染一次，保证最终视图完整。
+ */
+const LIVE_WINDOW = 8000
+/** 流式期间的合并间隔。400ms 对人眼仍像「实时」，但把重渲染次数砍掉近三分之二。 */
+const LIVE_INTERVAL = 400
+/** 判定「窗口起点是否落在代码围栏内部」时，前缀扫描量的上限：不让防御本身变成新的卡顿源。 */
+const LIVE_FENCE_SCAN_MAX = 200000
+/**
+ * 为「切在换行处」最多允许放大的字符数。
+ *
+ * 退到最近换行会让窗口比预算长出「本行已过去的部分」；单行本身就超过窗口时（压缩过的 JSON、
+ * 一行的长 base64），这个放大可以到几千上万字，窗口也就重新失去了上限。超过这个额度就宁可
+ * 切在行中间：代价只是首行被当成新段落，规模却仍然钉死在窗口大小上。
+ */
+const LIVE_SNAP_MAX = 2000
+/** 窗口提示：内联样式，避免为一个临时提示去动样式表。 */
+const LIVE_WINDOW_HINT = '<p style="margin:0 0 0.5em;font-size:11px;opacity:0.65">…（生成中，仅显示最新内容）</p>'
+
+/** 渲染结果的容器，模板里用 `v-html` 挂上去。 */
 const liveHtml = ref('')
 const liveReasoningHtml = ref('')
-let liveTimer
-let liveReasoningTimer
 
-watch(() => state.live.text, (text) => {
-  if (text === '') {
-    liveHtml.value = ''
-    return
-  }
-  if (liveTimer !== undefined) return
-  liveTimer = window.setTimeout(() => {
-    liveTimer = undefined
-    liveHtml.value = renderMarkdown(state.live.text)
-  }, 140)
-})
+/**
+ * 每行开栏/闭栏标记（``` 或 ~~~）。围栏标记总是成对出现，所以「截断点之前的标记数为奇数」
+ * 就等于「窗口起点落在围栏内部」。
+ */
+const FENCE_LINE = /(?:^|\n)([ \t]*(?:`{3,}|~{3,})[^\n]*)/gu
 
-// The live reasoning chain is markdown as well, with the same throttle.
-watch(() => state.live.reasoning, (text) => {
-  if (text === '') {
-    liveReasoningHtml.value = ''
-    return
+/**
+ * 取末尾窗口。
+ *
+ * 截断点向后找最近的换行：从行中间切开会让尾巴的第一行变成新的段落 / 表格/ 列表项，显示会碎掉。
+ * 注意这里切的是**原始文本**，不是已生成的 HTML —— 半开合的 HTML 粘不回合法状态，而文本可以。
+ * @param text - 完整流式文本。
+ * @returns 交给 `renderMarkdown` 的文本，以及是否发生了裁剪。
+ */
+function liveWindow (text) {
+  if (text.length <= LIVE_WINDOW) return { text, clipped: false }
+  let start = text.length - LIVE_WINDOW
+  const lineStart = text.lastIndexOf('\n', start)
+  if (lineStart >= 0 && text.length - (lineStart + 1) <= LIVE_WINDOW + LIVE_SNAP_MAX) start = lineStart + 1
+  return { text: fenceOpenerBefore(text, start) + text.slice(start), clipped: true }
+}
+
+/**
+ * 窗口起点若落在代码围栏内部，补回那一行的开栏标记。
+ *
+ * 不补的话，尾巴的第一个闭合 ``` 会被 marked 当成开栏，把收流前的所有正文都吞进一个代码块 ——
+ * 恰好是最新、最该看的那一段。补一行开栏标记只是把缺的上下文补上，不涉及对渲染结果的二次截断，
+ * 因此不会出现「渲染半个 HTML 标签」。
+ * @param text - 完整流式文本。
+ * @param start - 窗口起点（一定落在某个换行之后）。
+ * @returns 需要前置的开栏行（含换行），没有则空串。
+ */
+function fenceOpenerBefore (text, start) {
+  // 前缀过长时放弃判定：宁可少一点防御，也不让扫描本身随字数变成新的卡顿来源。
+  if (start > LIVE_FENCE_SCAN_MAX) return ''
+  FENCE_LINE.lastIndex = 0
+  let count = 0
+  let opener = ''
+  let match
+  while ((match = FENCE_LINE.exec(text)) !== null && match.index < start) {
+    count += 1
+    opener = match[1]
   }
-  if (liveReasoningTimer !== undefined) return
-  liveReasoningTimer = window.setTimeout(() => {
-    liveReasoningTimer = undefined
-    liveReasoningHtml.value = renderMarkdown(state.live.reasoning)
-  }, 140)
+  return count % 2 === 1 ? `${opener}\n` : ''
+}
+
+/**
+ * 渲染一段流式文本。
+ *
+ * 流式期间给 `renderMarkdown` 的只有窗口；不在流式期间（或调用方在收流时）则原样交给它，
+ * 因此最终视图一定是完整的整段内容，不会停在窗口上。
+ * @param text - 完整流式文本。
+ * @returns 净化后的 HTML；发生裁剪时前面带一行提示。
+ */
+function renderStream (text) {
+  if (text === '') return ''
+  const windowed = state.telemetry.running === true ? liveWindow(text) : { text, clipped: false }
+  const html = renderMarkdown(windowed.text)
+  return windowed.clipped ? LIVE_WINDOW_HINT + html : html
+}
+
+/**
+ * 把一个流式文本接到一个 HTML ref 上：节流渲染，收流后立刻整段渲染。
+ *
+ * 答案和思维链走同一条路径，所以抽成一处 —— 两处各写一份节流曾经漏过清理：收流后残留的
+ * 定时器还会再跑一次整段渲染，正好落在最不该慢的那一帧。
+ * @param read - 读取当前文本。
+ * @param target - 接收 HTML 的 ref。
+ * @param afterCommit - 内容确实变了之后的回调（贴底滚动）。
+ * @returns 解绑函数，供组件卸载时清理。
+ */
+function bindStream (read, target, afterCommit) {
+  let timer
+  const cancel = () => {
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    timer = undefined
+  }
+  const commitNow = () => {
+    const html = renderStream(read())
+    // 内容没变就不动 DOM：v-html 换一个相同的字符串同样会重建整棵子树。
+    if (html === target.value) return
+    target.value = html
+    afterCommit?.()
+  }
+  const stopText = watch(read, (text) => {
+    if (text === '') {
+      cancel()
+      target.value = ''
+      return
+    }
+    if (timer !== undefined) return
+    timer = window.setTimeout(() => {
+      timer = undefined
+      commitNow()
+    }, LIVE_INTERVAL)
+  })
+  // 收流：节流待处理的那一次已经没有意义，取消它并按整段文本渲染一次（只付这一帧的完整成本）。
+  const stopRunning = watch(() => state.telemetry.running, (running) => {
+    if (running === true) return
+    cancel()
+    if (read() !== '') commitNow()
+  })
+  return () => {
+    stopText()
+    stopRunning()
+    cancel()
+  }
+}
+
+const unbindLive = bindStream(() => state.live.text, liveHtml, () => {
+  void scrollToBottomIfSticky()
 })
+const unbindLiveReasoning = bindStream(() => state.live.reasoning, liveReasoningHtml)
 
 onBeforeUnmount(() => {
-  if (liveTimer !== undefined) window.clearTimeout(liveTimer)
+  unbindLive()
+  unbindLiveReasoning()
 })
 </script>
 
