@@ -108,6 +108,14 @@ const MAX_BODY = 64 * 1024
 const MAX_UPLOAD_BODY = 16 * 1024 * 1024
 /** Concurrent SSE clients. */
 const MAX_CLIENTS = 8
+/**
+ * 空闲 SSE 连接的心跳间隔。
+ *
+ * 空闲连接上不再有任何字节往来时，操作系统、反向代理和手机省电策略都会把它判死；断流本身不致命，
+ * 但浏览器会马上重连，而每次重连都会重发一遍整段历史快照 —— 那个整表替换与全量重渲染才是页面
+ * 卡死的来源。所以空闲连接必须自己定期证明它还活着。
+ */
+const SSE_HEARTBEAT_MS = 20_000
 /** Failed logins per peer per window. */
 const LOGIN_LIMIT = 6
 const LOGIN_WINDOW_MS = 60_000
@@ -881,16 +889,68 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
     }
   }
 
+  /**
+   * @param client - an SSE client.
+   * @returns whether the response can no longer carry bytes.
+   */
+  function isDeadClient (client) {
+    if (client.closed) return true
+    const response = client.response
+    // 写完 (writableEnded)、被销毁 (destroyed)、底层 socket 已断开 —— 三者都意味着它不会再收到任何事件，
+    // 却仍占着 MAX_CLIENTS 的名额。
+    return response.writableEnded === true || response.destroyed === true || response.socket?.destroyed === true
+  }
+
+  /**
+   * 给一个 SSE 连接起心跳。
+   *
+   * 心跳写的是 SSE 注释行（以 ':' 开头）：它只填充几个字节，不构成事件，前端解析器看不到任何
+   * event/data，因此不可能改变页面状态。这正是协议为保活预留的写法，也正是不用业务事件做心跳的原因
+   * —— 业务事件会在客户端触发折帧与重渲染。
+   * @param client - the SSE client.
+   */
+  function startHeartbeat (client) {
+    stopHeartbeat(client)
+    client.heartbeat = setInterval(() => {
+      if (isDeadClient(client)) {
+        // 连接已经没了：先停表再回收，别让定时器在事件循环里空转。
+        dropClient(client)
+        return
+      }
+      try {
+        // 注释行：不会触发前端任何事件，只用于让中间设备看到字节流动。
+        client.response.write(': ping\n\n')
+      } catch {
+        dropClient(client)
+      }
+    }, SSE_HEARTBEAT_MS)
+    // 心跳只为一条活着的连接服务，不该拖住宿主退出。
+    client.heartbeat.unref?.()
+  }
+
+  /**
+   * @param client - the SSE client.
+   * Stop and forget the heartbeat timer, so a dropped connection cannot leave a timer behind.
+   */
+  function stopHeartbeat (client) {
+    if (client.heartbeat === undefined) return
+    clearInterval(client.heartbeat)
+    client.heartbeat = undefined
+  }
+
   /** Remove one SSE client and stop its Session stream. */
   function dropClient (client) {
     if (client.closed) return
     client.closed = true
+    // 定时器必须和客户端一起回收：否则每次断线都会留下一个每 20 秒醒一次的空转定时器。
+    stopHeartbeat(client)
     clients.delete(client)
     try {
       client.sessionAbort?.abort()
     } catch {
       /* already aborted */
     }
+    client.sessionAbort = undefined
     try {
       client.response.end()
     } catch {
@@ -1096,6 +1156,8 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           sessionsPayload,
           workspaceTree,
           managementState,
+          // 真实监听端口：退出/重启要用它判断旧监听器是否已经释放，不能信页面自报的端口。
+          boundPort,
           sessionsOf,
           agentOf,
           setPinned: (ids) => {
@@ -1454,8 +1516,14 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
     if (request.method === 'GET' && url.pathname === '/api/stream') {
       const sessionId = url.searchParams.get('sessionId') ?? undefined
+      // 满员判断之前先回收僵尸连接：一件写完的、被销毁的、socket 已断的连接还挂在集合里时，新连接
+      // 就会吃 503，而客户端按约 3 秒重试 —— 一次回收不及时就放大成重连风暴。
+      for (const candidate of [...clients]) {
+        if (isDeadClient(candidate)) dropClient(candidate)
+      }
       if (clients.size >= MAX_CLIENTS) {
-        json(503, { error: 'too many clients' })
+        // retry-after 让浏览器/代理真正退避，而不是立刻再撞一次。
+        json(503, { error: 'too many clients' }, { 'retry-after': '5' })
         return
       }
       response.writeHead(200, {
@@ -1464,11 +1532,23 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
       })
-      const client = { response, closed: false, sessionAbort: undefined, sessionId: undefined }
+      const client = {
+        response,
+        closed: false,
+        sessionAbort: undefined,
+        sessionId: undefined,
+        /** 心跳定时器，随连接一起回收。 */
+        heartbeat: undefined,
+      }
       clients.add(client)
+      // 三条断开路径都收敛到 dropClient（它自身幂等）：响应关闭、请求结束、底层连接被重置。
+      response.on('close', () => {
+        dropClient(client)
+      })
       request.on('close', () => {
         dropClient(client)
       })
+      startHeartbeat(client)
       writeEvent(client, 'hello', { urls: candidateUrls(settings.bind, boundPort) })
       writeEvent(client, 'pending', pendingPayload())
       if (sessionId !== undefined && sessionId !== '') await pumpSession(client, sessionId)
