@@ -1,3 +1,5 @@
+import { createStreamParser } from './worker-client.js'
+
 /**
  * Transport for the Remote Control Host plugin: JSON over fetch plus the Session SSE feed.
  *
@@ -84,11 +86,80 @@ export async function consumeLinkToken () {
  * @param handlers - `{ onFrame, onPending, onSessions, onError, onOpen }`.
  * @returns the EventSource, so the caller can close it when the selection changes.
  */
+/**
+ * The stream parser, shared by every connection.
+ *
+ * One Worker for the page. Creating one per stream leaked a Worker on every reconnect, and parsing each
+ * frame through its own round trip put a growing queue behind a promise chain — with a reply arriving
+ * dozens of frames per second that is what hung the tab (RESULT_CODE_HUNG).
+ */
+let sharedParser
+
+/** @returns the shared parser, created on first use. */
+function getParser () {
+  if (sharedParser === undefined) sharedParser = createStreamParser()
+  return sharedParser
+}
+
+/** The most frames parsed in a single Worker round trip. */
+const PARSE_BATCH = 64
+
 export function openStream (sessionId, handlers) {
+  const parser = getParser()
+  /**
+   * One queue per event channel. Order inside a channel is all the page ever relied on, and batching
+   * keeps the number of round trips proportional to wall-clock time rather than to frame count.
+   */
+  const queues = new Map()
+  let draining = false
+
+  /** Keep draining channel queues until every one of them is empty. */
+  const drain = async () => {
+    if (draining) return
+    draining = true
+    try {
+      for (;;) {
+        const busy = [...queues.values()].filter((entry) => entry.items.length > 0)
+        if (busy.length === 0) break
+        for (const entry of busy) {
+          const batch = entry.items.splice(0, PARSE_BATCH)
+          if (batch.length === 0) continue
+          const result = await parser.parse(batch)
+          for (const frame of result.frames) {
+            try {
+              entry.handler(entry.pick === undefined ? frame : entry.pick(frame))
+            } catch (error) {
+              handlers.onError?.(String(error?.message ?? error))
+            }
+          }
+          if (result.errors.length > 0) handlers.onError?.(result.errors[0])
+        }
+      }
+    } finally {
+      draining = false
+    }
+  }
+
+  /**
+   * @param key - the event channel name.
+   * @param handler - the callback for that channel.
+   * @param payload - the raw `event.data` text.
+   * @param pick - optional projection applied to each parsed frame.
+   */
+  const enqueue = (key, handler, payload, pick) => {
+    if (handler === undefined) return
+    let entry = queues.get(key)
+    if (entry === undefined) {
+      entry = { handler, pick, items: [] }
+      queues.set(key, entry)
+    }
+    entry.items.push(payload)
+    if (!draining) void drain()
+  }
   const source = new EventSource(`/api/stream?sessionId=${encodeURIComponent(sessionId)}`)
   source.addEventListener('frame', (event) => {
     try {
-      handlers.onFrame?.(JSON.parse(event.data))
+      enqueue('frame', handlers.onFrame, event.data)
     } catch (error) {
       // A frame that cannot be read has to be said out loud: keeping the previous transcript in silence is
       // exactly how a Session ends up looking empty.
@@ -96,13 +167,13 @@ export function openStream (sessionId, handlers) {
     }
   })
   source.addEventListener('pending', (event) => {
-    handlers.onPending?.(JSON.parse(event.data))
+    enqueue('pending', handlers.onPending, event.data)
   })
   source.addEventListener('sessions', (event) => {
-    handlers.onSessions?.(JSON.parse(event.data).sessions ?? [])
+    enqueue('sessions', handlers.onSessions, event.data, (frame) => frame.sessions ?? [])
   })
   source.addEventListener('stream-error', (event) => {
-    handlers.onError?.(JSON.parse(event.data).message)
+    enqueue('stream-error', handlers.onError, event.data, (frame) => frame.message)
   })
   source.addEventListener('hello', () => {
     handlers.onOpen?.()

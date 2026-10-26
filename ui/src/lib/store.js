@@ -58,6 +58,10 @@ export const state = reactive({
   hasOlder: true,
   live: { attemptId: undefined, text: '', reasoning: '' },
   streamError: '',
+  /** 因队列积压被丢弃的流帧总数；纯可观测计数，用来确认背压是否真的生效。 */
+  streamDropped: 0,
+  /** foldStream 抛异常的累计次数；坏帧被跳过，页面靠这个数字说明发生过几次。 */
+  streamErrors: 0,
   actionError: '',
   models: { groups: [], defaultSelection: undefined },
   selection: undefined,
@@ -700,6 +704,12 @@ export async function selectSession (sessionId) {
   rememberSession(sessionId)
   // The transcript is empty from here until the snapshot lands, which is worth saying out loud: an empty
   // transcript and a loading one look identical otherwise.
+  // Frames of the previous turn must not be folded into the new session's transcript.
+  pendingStreams = []
+  if (streamFlush !== undefined) {
+    cancelAnimationFrame?.(streamFlush)
+    streamFlush = undefined
+  }
   state.sessionLoading = true
   state.sessionSlow = false
   state.sessionFailed = false
@@ -888,12 +898,81 @@ function flushEvents () {
 let pendingStreams = []
 let streamFlush
 
-/** Fold every queued stream frame, once per frame. */
+/**
+ * 一次 flush 最多占用的毫秒数。
+ *
+ * 积压几百帧时，一帧内把它们全部折叠仍然可能占住主线程几十上百毫秒，页面照旧"未响应"。6ms 留出
+ * 同一帧里 Vue 渲染和浏览器自身工作的余量，剩下的交给下一个动画帧继续。
+ */
+const STREAM_SLICE_MS = 6
+
+/**
+ * 流帧队列的上限。
+ *
+ * 流帧是累积型快照：每一帧都携带"到此为止"的完整文本/思考，foldStream 只依赖最新形态即可收敛，
+ * 丢掉中间帧损失的只是若干次中间渲染，不会写错内容。反过来，无界的积压会让每轮 flush 的工作量
+ * 随右边界一直涨，最终压垮主线程——所以宁可丢中间帧，也要保住最新一条。
+ */
+const MAX_PENDING_STREAMS = 400
+
+/** 每 N 次 foldStream 异常才打一条警告：坏帧往往成串出现，逐条打印只会淹没真正有用的信息。 */
+const STREAM_ERROR_LOG_EVERY = 50
+
+/**
+ * @param callback - 要在下一帧执行的工作。
+ * @returns 排队句柄；这里只用它判断"是否已经排过队"，不做取消。
+ *
+ * 测试或非浏览器环境没有 requestAnimationFrame，退化成 16ms 定时器：节奏仍是一帧一次，只是
+ * 不再与渲染对齐。这样本模块在没有 DOM 的进程里也能被加载和驱动。
+ */
+function nextFrame (callback) {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return window.requestAnimationFrame(callback)
+  }
+  return setTimeout(callback, 16)
+}
+
+/**
+ * 把队列压回上限：丢掉最旧的中间帧，保留最新一条。
+ *
+ * 只在入队时裁剪，flush 中途不裁——否则正在被消费的顺序会被打乱。
+ */
+function trimStreamBacklog () {
+  const overflow = pendingStreams.length - MAX_PENDING_STREAMS
+  if (overflow <= 0) return
+  pendingStreams = pendingStreams.slice(overflow)
+  state.streamDropped += overflow
+}
+
+/**
+ * 分片消费排队中的流帧。
+ *
+ * 严格按到达顺序消费，每片控制在 STREAM_SLICE_MS 以内；没排空就续一帧，排空了才把句柄复位。
+ * 句柄只在"还有活没干完"时存在，handleFrame 靠它判断要不要重新起跑，所以中途新到的帧追加到
+ * 队尾后一定能被同一批剩余工作接上，不会丢也不会乱序。
+ */
 function flushStreams () {
   streamFlush = undefined
-  const frames = pendingStreams
-  pendingStreams = []
-  for (const frame of frames) foldStream(frame)
+  if (pendingStreams.length === 0) return
+  const deadline = nowMs() + STREAM_SLICE_MS
+  // 用游标而不是 shift：一帧里要消费几十上百条，从头部反复搬家是没必要的开销。
+  let done = 0
+  // 先无条件处理一条，保证每片都有进展：一条都折叠不了的话，续帧会变成空转。
+  do {
+    const frame = pendingStreams[done]
+    done += 1
+    try {
+      foldStream(frame)
+    } catch (error) {
+      // 单帧坏掉不能拖垮整条队列：这一帧计入错误数后跳过，后面还有几百帧等着折叠。
+      state.streamErrors += 1
+      if (state.streamErrors % STREAM_ERROR_LOG_EVERY === 1) {
+        console.warn('[remote-control] 折叠流帧失败，已跳过该帧：', error, `（累计 ${String(state.streamErrors)} 次）`)
+      }
+    }
+  } while (done < pendingStreams.length && nowMs() < deadline)
+  if (done > 0) pendingStreams = pendingStreams.slice(done)
+  if (pendingStreams.length > 0) streamFlush = nextFrame(flushStreams)
 }
 
 function handleFrame (frame) {
@@ -932,7 +1011,9 @@ function handleFrame (frame) {
   }
   if (frame.type === 'assistant-stream') {
     pendingStreams.push(frame.frame)
-    if (streamFlush === undefined) streamFlush = window.requestAnimationFrame(flushStreams)
+    // 先入队再裁剪：新到的一条如果在队尾，就一定不会被刚做的这次裁剪丢掉。
+    trimStreamBacklog()
+    if (streamFlush === undefined) streamFlush = nextFrame(flushStreams)
   }
 }
 
