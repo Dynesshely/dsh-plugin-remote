@@ -49,6 +49,38 @@ async function usageRoutes (api) {
   }
 }
 
+/**
+ * The file browser, re-imported whenever that module changes — the same trick the usage module uses, so
+ * editing the browser does not need a DSH restart either.
+ */
+let filesModule = { module: undefined, mtimeMs: 0 }
+
+/** @returns the freshly imported file-browser module. */
+async function loadFiles () {
+  const url = new URL('./files.js', import.meta.url)
+  const info = statSync(fileURLToPath(url))
+  if (filesModule.module === undefined || filesModule.mtimeMs !== info.mtimeMs) {
+    const fresh = new URL(url.href)
+    fresh.searchParams.set('v', String(info.mtimeMs))
+    filesModule = { module: await import(fresh.href), mtimeMs: info.mtimeMs }
+  }
+  return filesModule.module
+}
+
+/**
+ * @param api - the shell context.
+ * @returns whether the file module handled the request.
+ */
+async function fileRoutes (api) {
+  try {
+    const module = await loadFiles()
+    return await module.handleFiles(api)
+  } catch (error) {
+    api.json(500, { error: `files module failed: ${String(error?.message ?? error)}` })
+    return true
+  }
+}
+
 /** The desktop app's executable name, used when the Host does not run as the app itself. */
 const APP_NAME = 'DeepSeek Harness.exe'
 
@@ -377,6 +409,8 @@ export async function handle (api) {
   if (await usageRoutes(api)) return true
   // Model capacity metadata, joined from the gateway catalogue.
   if (await handleModelMeta(api)) return true
+  // Read-only file browser over the workspace.
+  if (await fileRoutes(api)) return true
   const method = api.request.method
   if (method === 'GET') {
     if (api.url.pathname === '/api/presets') return await presets(api)

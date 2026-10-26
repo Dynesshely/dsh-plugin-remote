@@ -771,7 +771,9 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
         'referrer-policy': 'no-referrer',
         'x-content-type-options': 'nosniff',
         // The shell needs its own bundle plus inline styles; everything else stays blocked.
-        'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        // `frame-src`/`object-src` are for the file browser's previews: a PDF or a video is shown in a
+        // same-origin frame, which `default-src 'none'` would otherwise refuse.
+        'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; frame-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       })
       response.end(payload)
       return
@@ -836,6 +838,8 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           request,
           url,
           json,
+          // Raw access to the response: the file browser streams bytes and byte ranges with it.
+          response,
           readJson,
           broadcast,
           pendingPayload,
