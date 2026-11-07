@@ -151,8 +151,21 @@ const scroller = ref(null)
 
 // The transcript rows correct the scroll offset for their own height changes, so they need to know what
 // scrolls them.
-watch(scroller, (element) => setScrollRoot(element), { immediate: true })
+watch(scroller, (element) => {
+  setScrollRoot(element)
+  // 滚动容器刚拿到手时也钉一次：首屏内容可能已经在这一刻之前就渲染完了。
+  if (element !== null) pinBottomFor(600)
+}, { immediate: true })
 const sticky = ref(true)
+/**
+ * 补偿贴底的待执行帧/定时器。
+ *
+ * 首屏快照是分片到达的，图片/字体还会在后面把内容撑高；单靠「行数变化 → 贴底」会在这些时候漏掉。
+ * 所以在切会话、首屏完成、发送成功时补两次贴底（下一帧 + 260ms），覆盖延迟增长。窗口结束后完全回到
+ * 既有的 sticky 逻辑 —— 不做任何逐帧测量。
+ */
+let pinFrame
+let pinTimer
 const showLiveReasoning = ref(false)
 /** Index of the prompt currently being read, for the rail's active tick. */
 const activePrompt = ref(-1)
@@ -252,6 +265,50 @@ function onScroll () {
   schedulePromptSync()
 }
 
+/** 取消挂起的补偿贴底（切会话/卸载时用，避免旧会话的定时器把新会话拽回底部）。 */
+function clearPinTimers () {
+  if (pinFrame !== undefined) {
+    cancelAnimationFrame(pinFrame)
+    pinFrame = undefined
+  }
+  if (pinTimer !== undefined) {
+    clearTimeout(pinTimer)
+    pinTimer = undefined
+  }
+}
+
+/**
+ * 立刻贴到底部（instant，不用 smooth：弱网下平滑滚动会跟丢目标，反而停在半路）。
+ *
+ * 只在 `sticky` 仍然为真时执行 —— 读者在这几百毫秒里手动上滚了，就绝不把他拽回来。
+ */
+function pinToBottom () {
+  if (!sticky.value) return
+  const node = scroller.value
+  if (node === null) return
+  node.scrollTop = node.scrollHeight
+}
+
+/**
+ * 钉底一段时间：nextTick 后一次、下一帧一次、再延时一次。
+ * @param ms - 窗口长度；最后一次补滚取它的一半（120–400ms），覆盖图片/字体造成的延迟撑高。
+ */
+function pinBottomFor (ms) {
+  sticky.value = true
+  clearPinTimers()
+  void nextTick(() => {
+    pinToBottom()
+    pinFrame = window.requestAnimationFrame(() => {
+      pinFrame = undefined
+      pinToBottom()
+    })
+    pinTimer = window.setTimeout(() => {
+      pinTimer = undefined
+      pinToBottom()
+    }, Math.min(400, Math.max(120, ms / 2)))
+  })
+}
+
 watch([() => transcriptItems.value.length, () => state.selected], async () => {
   await nextTick()
   syncActivePrompt()
@@ -278,7 +335,28 @@ watch(() => transcriptItems.value.length, () => {
 
 watch(() => state.selected, async () => {
   showLiveReasoning.value = false
+  // 新会话从头看最新内容：清掉上一个会话的补偿贴底，再重新钉一次底部。
+  pinBottomFor(600)
   await Promise.all([loadPermissions(state.selected), loadModels()])
+})
+
+/**
+ * 首屏快照完成：内容第一次到齐，把视图钉到最新的一屏。
+ *
+ * 这是「会话内容从最新往前看」的落地点 —— 数据本来给的就是最近窗口（宿主 follow 从末尾往回走），
+ * 缺的只是首屏把滚动位置放到底部；`加载更早` 仍然在顶部，往更早翻。
+ */
+watch(() => state.sessionLoading, (loading) => {
+  if (loading) {
+    clearPinTimers()
+    return
+  }
+  pinBottomFor(400)
+})
+
+/** 发送 prompt 成功后立刻贴底：读者刚发出自己的消息，应当马上看到它（弱网下用 instant）。 */
+watch(() => state.promptSendCount, () => {
+  pinBottomFor(600)
 })
 
 /**
@@ -430,6 +508,8 @@ const unbindLiveReasoning = bindStream(() => state.live.reasoning, liveReasoning
 onBeforeUnmount(() => {
   unbindLive()
   unbindLiveReasoning()
+  // 卸载后不该再有补偿贴底的定时器/帧在跑。
+  clearPinTimers()
 })
 </script>
 

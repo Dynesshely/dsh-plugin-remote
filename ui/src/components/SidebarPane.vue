@@ -35,6 +35,22 @@ function readCollapsed () {
 }
 
 const collapsed = ref(readCollapsed())
+/**
+ * 每个工作区默认只显示最近 N 个会话。
+ *
+ * 会话列表可能有几百项（折叠工作区本身就是为了这个），一次全渲染既慢又没必要。
+ * 置顶会话不受这个上限约束：读者置顶就是为了让它一直在眼前，藏起来反而反直觉。
+ */
+const VISIBLE_LIMIT = 8
+/**
+ * 本次会话里点过「展开全部」的工作区。
+ *
+ * 只在内存里，不进 localStorage：要求是「折叠后重新展开回到默认的最近 N 个」，所以这个状态必须随
+ * 折叠一起丢弃（见 `toggle`）。
+ */
+const expandedAll = ref(new Set())
+/** 搜索时不做截断：读者要找的东西可能正好被截断藏起来。 */
+const isSearching = computed(() => query.value.trim() !== '')
 /** Archived rows are folded away until asked for, like the desktop's archived section. */
 const archivedOpen = ref(false)
 /** The row whose action menu is open, plus its screen position (the list scrolls, so it is fixed). */
@@ -53,14 +69,58 @@ function isCollapsed (id) {
 }
 
 function toggle (id) {
-  collapsed.value = isCollapsed(id)
-    ? collapsed.value.filter((candidate) => candidate !== id)
-    : [...collapsed.value, id]
+  const folding = !isCollapsed(id)
+  collapsed.value = folding
+    ? [...collapsed.value, id]
+    : collapsed.value.filter((candidate) => candidate !== id)
+  // 「展开全部」不持久化：工作区一折叠就复位，再展开时回到默认的最近 N 个。
+  if (folding) {
+    const next = new Set(expandedAll.value)
+    next.delete(id)
+    expandedAll.value = next
+  }
   try {
     window.localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed.value))
   } catch {
     /* a full or blocked storage keeps the in-memory state */
   }
+}
+
+/** @returns the row cap applied to a group before its sessions are truncated. */
+function visibleLimitOf (group) {
+  const pinned = group.sessions.filter((session) => isPinned(session.id)).length
+  return Math.max(VISIBLE_LIMIT, pinned)
+}
+
+/** @returns the Session rows to render right now (searching or expanded shows everything). */
+function visibleSessions (group) {
+  if (isSearching.value || expandedAll.value.has(group.id)) return group.sessions
+  return group.sessions.slice(0, visibleLimitOf(group))
+}
+
+/** @returns how many rows the default view hides for a group (0 = no "expand all" row needed). */
+function hiddenCountOf (group) {
+  if (isSearching.value || expandedAll.value.has(group.id)) return 0
+  return Math.max(0, group.sessions.length - visibleLimitOf(group))
+}
+
+/** @returns whether the group is currently showing every row outside a search. */
+function isExpanded (group) {
+  return !isSearching.value && expandedAll.value.has(group.id)
+}
+
+/** 展开该工作区的全部会话（只存在于内存，不持久化）。 */
+function expandGroup (id) {
+  const next = new Set(expandedAll.value)
+  next.add(id)
+  expandedAll.value = next
+}
+
+/** 收起回到默认的最近 N 个。 */
+function collapseGroup (id) {
+  const next = new Set(expandedAll.value)
+  next.delete(id)
+  expandedAll.value = next
 }
 
 /**
@@ -295,7 +355,9 @@ function entriesFor (session) {
         title="DSH 菜单"
         @click="openDsh"
       >
-        <img src="/app-icon.png" alt="" class="h-full w-full scale-125 object-cover" />
+        <!-- \`object-contain\` (not \`cover\`): the artwork already carries its own transparent margin, so
+               cropping it is what made the tile look cramped. -->
+        <img src="/app-icon.png" alt="" class="h-full w-full object-contain p-[3px]" />
       </button>
       <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-wide">DSH REMOTE</span>
       <span
@@ -362,7 +424,7 @@ function entriesFor (session) {
           class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-zinc-900/10 pl-2.5 dark:border-white/10"
         >
           <div
-            v-for="session in group.sessions"
+            v-for="session in visibleSessions(group)"
             :key="session.id"
             class="group/row flex items-center gap-1 rounded-xl pr-1 transition-all duration-200"
             :class="session.id === state.selected
@@ -406,6 +468,28 @@ function entriesFor (session) {
               <AppIcon name="more" :size="14" />
             </button>
           </div>
+
+          <!-- 默认只显示最近 N 个；被折叠的会话在这里按需展开，收起后立即回到默认。 -->
+          <button
+            v-if="hiddenCountOf(group) > 0"
+            type="button"
+            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-zinc-400 transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+            :aria-expanded="false"
+            @click.stop="expandGroup(group.id)"
+          >
+            <AppIcon name="chevron" :size="11" class="-rotate-90" />
+            <span>展开全部（还有 {{ hiddenCountOf(group) }} 个）</span>
+          </button>
+          <button
+            v-else-if="isExpanded(group)"
+            type="button"
+            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-zinc-400 transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+            :aria-expanded="true"
+            @click.stop="collapseGroup(group.id)"
+          >
+            <AppIcon name="chevron" :size="11" class="rotate-180" />
+            <span>收起</span>
+          </button>
         </div>
       </div>
 

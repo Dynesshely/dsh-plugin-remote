@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import { api, openStream, UnauthorizedError } from './api.js'
+import { api, openStream, UnauthorizedError, uploadImage } from './api.js'
 import { parseQuestionArgs, parseQuestionResult } from './questions.js'
 import {
   EMPTY_SNAPSHOT_PROGRESS,
@@ -65,10 +65,39 @@ export const state = reactive({
   hasOlder: true,
   live: { attemptId: undefined, text: '', reasoning: '' },
   streamError: '',
-  /** 因队列积压被丢弃的流帧总数；纯可观测计数，用来确认背压是否真的生效。 */
+  /**
+   * 被**无损合并**掉的流帧数量。
+   *
+   * 流帧是增量 delta，合并只是把连续的同类 delta 串成一条（结果逐字相同），所以这个数字变大
+   * 不代表丢了内容。只有极端交错到合并后仍超上限时才会真的丢帧，那种情况会同时置 `needsResync`。
+   */
   streamDropped: 0,
   /** foldStream 抛异常的累计次数；坏帧被跳过，页面靠这个数字说明发生过几次。 */
   streamErrors: 0,
+  /** 待折叠事件队列的当前长度，用来确认「后台攒了多少」。 */
+  eventBacklog: 0,
+  /** 因事件队列到上限而被拒收的帧数（这些帧不会丢——它们由 `needsResync` 的重拉补回来）。 */
+  eventsDeferred: 0,
+  /**
+   * 需要重新拉一份当前会话快照。
+   *
+   * 置位的唯一理由：队列里确实有帧没能进入状态（事件队列顶到上限，或流帧合并后仍超限）。
+   * 事件帧不是累积型，缺一条就是永久缺一行，所以只能整份对账，而不是悄悄少一段。
+   */
+  needsResync: false,
+  /** 已执行的重拉次数，纯可观测。 */
+  resyncs: 0,
+  /** 页面进入隐藏的时刻（0 表示可见），用来衡量后台时长。 */
+  hiddenSince: 0,
+  /** 最近一次「隐藏 → 恢复」经过的毫秒数。 */
+  hiddenMs: 0,
+  /** 最近一条运行期错误的可读描述；App 顶部据此显示错误条。 */
+  lastError: '',
+  /** 最近一条错误的时间戳与累计条数。 */
+  lastErrorAt: 0,
+  errorCount: 0,
+  /** 转写折叠失败过，页面正显示降级内容。 */
+  transcriptDegraded: false,
   /**
    * SSE 自动重连的次数，以及最近一次收到 `host hello` 的时间戳（毫秒，0 表示尚未连上）。
    *
@@ -80,6 +109,13 @@ export const state = reactive({
   /** 因「快照与当前窗口一致/更旧」被整个跳过的重连快照数量，用来确认去重真的生效。 */
   snapshotSkips: 0,
   actionError: '',
+  /**
+   * 成功发出（宿主已接受）一条 prompt 的次数。
+   *
+   * 为什么用计数而不是时间戳：转录面板只需要「刚刚有一次发送成功」这一个事件，计数天然去重
+   * （同毫秒两次发送也能分辨），也不用担心时钟回拨。面板据此把自己贴回底部。
+   */
+  promptSendCount: 0,
   models: { groups: [], defaultSelection: undefined },
   selection: undefined,
   permissions: { options: [], defaultPreset: '', current: undefined },
@@ -259,7 +295,27 @@ function sessionFingerprint (sessions, pinned, archived) {
   return `${rows.join('|')}~${pinned.join(',')}~${archived.join(',')}`
 }
 
+/**
+ * 转写条目的公开计算属性。
+ *
+ * 折叠会在每次事件窗口变化时跑一遍，任何一个意外形状都可能让它抛异常 —— 而一个抛异常的
+ * computed 会把整棵组件树带下水（Vue 在渲染中抛错时，读者看到的就是白/黑屏）。这里把它降级成
+ * 「空转写 + 错误条」：内容暂时不全，但页面还活着、错误可见、状态可恢复。
+ */
 export const transcriptItems = computed(() => {
+  try {
+    const items = buildTranscriptItems()
+    state.transcriptDegraded = false
+    return items
+  } catch (error) {
+    state.transcriptDegraded = true
+    reportError(error, 'transcript')
+    return []
+  }
+})
+
+/** @returns 真正做折叠的那一遍（纯函数式，不碰 DOM）。 */
+function buildTranscriptItems () {
   const items = []
   const toolIndex = new Map()
   /** The most recent prompt, so injected notes can be folded into its bubble. */
@@ -425,7 +481,7 @@ export const transcriptItems = computed(() => {
   // Prune first: the caches only need to outlive the transcript window.
   if (itemCache.size > 4000) resetTranscriptCache()
   return grouped.map((item) => (item.kind === 'toolGroup' ? stabilizeGroup(item) : stabilize(item)))
-})
+}
 
 /* ---------------------------------------------------------------- context notes */
 
@@ -546,10 +602,12 @@ export function blocksToText (message) {
   return [parts.text, ...parts.files].filter((part) => part !== '').join('\n')
 }
 
-/** Load the Session catalog, workspaces, and pending interactions. */
-export async function loadState () {
+/**
+ * @param signal - 可选的取消信号；切换会话时上一条会话的这些附属请求会被中止（D）。
+ */
+export async function loadState (signal) {
   try {
-    const payload = await api('/api/state')
+    const payload = await api('/api/state', { signal })
     state.bind = payload.bind ?? ''
     // Replacing the array re-renders the whole sidebar, and the Host's status broadcasts fire this
     // loader repeatedly. When nothing the sidebar draws from has changed, the array is left alone.
@@ -586,6 +644,8 @@ export async function loadState () {
       state.booted = true
       return
     }
+    // 被后一次加载取消：这次的结果已经没人要了，也不能当成启动失败去亮错误页。
+    if (String(error?.message ?? error) === '已取消') return
     state.bootError = String(error.message ?? error)
     state.booted = true
   }
@@ -601,10 +661,14 @@ export async function loadModels () {
   }
 }
 
-/** Load the permission catalog once. */
-export async function loadPermissions (sessionId) {
+/**
+ * Load the permission catalog once.
+ * @param sessionId - the Session.
+ * @param signal - 可选的取消信号（切会话/切模型时旧请求作废）。
+ */
+export async function loadPermissions (sessionId, signal) {
   try {
-    const payload = await api(`/api/permissions?sessionId=${encodeURIComponent(sessionId ?? '')}`)
+    const payload = await api(`/api/permissions?sessionId=${encodeURIComponent(sessionId ?? '')}`, { signal })
     state.permissions = {
       options: payload.options ?? [],
       defaultPreset: payload.defaultPreset ?? '',
@@ -615,8 +679,14 @@ export async function loadPermissions (sessionId) {
   }
 }
 
+/** 当前会话切换的取消器：再次切换时上一次的附属请求（权限/模型选择）被中止（D）。 */
+let sessionAbort
 let source
 let refreshTimer
+/** 正在进行的目录加载；新的加载会中止旧的，弱网下不堆叠重复请求。 */
+let catalogAbort
+/** 隐藏期间被推迟的目录刷新，恢复可见时补一次。 */
+let refreshOnResume = false
 
 /**
  * Re-read the catalog soon, coalescing bursts.
@@ -628,7 +698,14 @@ function refreshSoon () {
   if (refreshTimer !== undefined) return
   refreshTimer = window.setTimeout(() => {
     refreshTimer = undefined
-    void loadState()
+    // 隐藏期间不做网络与状态工作：没有渲染需求，白耗流量与电量；恢复时补一次即可。
+    if (!pageVisible()) {
+      refreshOnResume = true
+      return
+    }
+    catalogAbort?.abort()
+    catalogAbort = new AbortController()
+    void loadState(catalogAbort.signal)
   }, 1200)
 }
 
@@ -763,17 +840,11 @@ export async function selectSession (sessionId) {
   // The transcript is empty from here until the snapshot lands, which is worth saying out loud: an empty
   // transcript and a loading one look identical otherwise.
   // Frames of the previous turn must not be folded into the new session's transcript.
-  pendingStreams = []
-  if (streamFlush !== undefined) {
-    cancelAnimationFrame?.(streamFlush)
-    streamFlush = undefined
-  }
-  // 没来得及折叠的事件、以及没拼完的分片快照同样属于上一个会话：切换后一律丢掉。
-  pendingEvents = []
-  if (pendingFlush !== undefined) {
-    cancelAnimationFrame?.(pendingFlush)
-    pendingFlush = undefined
-  }
+  dropPendingFrames()
+  // 「加载更早」是绑在旧会话上的：中途切走还让它落地，就会把旧会话的历史拼进新转写。
+  olderAbort?.abort()
+  olderAbort = undefined
+  state.loadingOlder = false
   pendingSnapshot = undefined
   state.sessionLoading = true
   state.sessionSlow = false
@@ -811,8 +882,15 @@ export async function selectSession (sessionId) {
     Object.assign(state.telemetry, snapshot, { running: selectedSession.value?.running === true })
   }
   source?.close()
+  // 切会话时把上一条会话的积压清掉：这些帧属于旧会话，折叠进新转写只会写错文本。
+  dropPendingFrames()
+  state.needsResync = false
+  forceSnapshotReplace = false
+  sessionAbort?.abort()
+  sessionAbort = new AbortController()
+  const signal = sessionAbort.signal
   source = openStream(sessionId, streamHandlers())
-  await Promise.all([loadPermissions(sessionId), refreshSelection()])
+  await Promise.all([loadPermissions(sessionId, signal), refreshSelection(signal)])
 }
 
 /**
@@ -956,9 +1034,13 @@ export function setLightweight (value) {
   }
 }
 
-/** Resolve which model the Session is currently using. */
-async function refreshSelection () {  try {
-    const payload = await api(`/api/selection?sessionId=${encodeURIComponent(state.selected ?? '')}`)
+/**
+ * Resolve which model the Session is currently using.
+ * @param signal - 可选的取消信号（切换会话时旧请求作废）。
+ */
+async function refreshSelection (signal) {
+  try {
+    const payload = await api(`/api/selection?sessionId=${encodeURIComponent(state.selected ?? '')}`, { signal })
     state.selection = payload.selected
   } catch {
     state.selection = undefined
@@ -985,17 +1067,77 @@ function resetTelemetry () {
   })
 }
 
-/** Events waiting for the next animation frame, so a burst costs one recompute rather than dozens. */
-let pendingEvents = []
-let pendingFlush
+/* ---------------------------------------------------------------- 帧调度闸门 */
 
-/** Append the buffered events in one go. */
+/**
+ * 页面是否可见。
+ *
+ * 隐藏标签页的 rAF **完全停摆**，而 SSE 一刻不停地把帧送进队列。旧实现把「什么时候消费」整个
+ * 交给 rAF，于是隐藏期间消费全部停住、队列无限增长，切回来那一帧一次性清空 —— 那是不可切片的
+ * 长任务，页面表现就是黑屏/假死。所以「可见」必须是显式的调度前提，而不是隐含假设。
+ * @returns 非浏览器环境（单测/Node）视为可见。
+ */
+function pageVisible () {
+  return typeof document === 'undefined' || document.hidden !== true
+}
+
+/** 待折叠事件；下一帧追加，使一串突发只触发一次重算，而不是每来一条重算一次。 */
+let pendingEvents = []
+let eventsFlush
+/** 页面隐藏导致消费暂停时置位，恢复后据此重新起跑。 */
+let eventsWaiting = false
+
+/**
+ * 事件队列上限。
+ *
+ * 事件帧**不是**累积型：中间丢一条，转写里就永久少一行。所以到上限时不再接收，而是置
+ * `needsResync`，等可见后整份重拉——宁可多一次请求，也不能留下一份悄悄错了的转写。
+ */
+const MAX_PENDING_EVENTS = 600
+
+/** 排一次事件折叠：可见才排，隐藏时只记一笔"恢复后继续"。 */
+function scheduleEvents () {
+  if (!pageVisible()) {
+    if (pendingEvents.length > 0) eventsWaiting = true
+    return
+  }
+  // 已经排过就不重复排：一次突发只需要一个句柄。
+  if (eventsFlush !== undefined) return
+  eventsWaiting = false
+  eventsFlush = nextFrame(flushEvents)
+}
+
+/**
+ * 消费一帧预算内的待折叠事件。
+ *
+ * 分片而不是一次性 `push(...all)`：一次恢复可能攒下几百条，全部追加会在同一个任务里触发整条
+ * 转写的重算与整表 patch。切片保证每次主线程占用有上界，顺序仍与到达完全一致。
+ */
 function flushEvents () {
-  pendingFlush = undefined
+  eventsFlush = undefined
   if (pendingEvents.length === 0) return
-  state.events.push(...pendingEvents)
-  pendingEvents = []
+  // 隐藏期间绝不消费：禁止在页面不可见时做渲染准备，也不让积压在这里被"悄悄清空"。
+  if (!pageVisible()) {
+    eventsWaiting = true
+    return
+  }
+  const deadline = nowMs() + STREAM_SLICE_MS
+  let done = 0
+  // 先无条件追加一条，保证每片都有进展，否则续帧会变成空转。
+  do {
+    state.events.push(pendingEvents[done])
+    done += 1
+  } while (done < pendingEvents.length && nowMs() < deadline)
+  pendingEvents = pendingEvents.slice(done)
   trimEvents()
+  state.eventBacklog = pendingEvents.length
+  if (pendingEvents.length > 0) {
+    scheduleEvents()
+    return
+  }
+  eventsWaiting = false
+  // 排空了才轮到重拉：可见状态下顶到上限同样会发生（突发太快），不能等到"下次切后台"才修。
+  if (state.needsResync) requestResync('事件队列曾顶到上限')
 }
 
 /** Fold one SSE frame into the transcript and the telemetry counters. */
@@ -1008,6 +1150,8 @@ function flushEvents () {
  */
 let pendingStreams = []
 let streamFlush
+/** 页面隐藏导致消费暂停时置位，恢复后据此重新起跑。 */
+let streamsWaiting = false
 
 /**
  * 一次 flush 最多占用的毫秒数。
@@ -1020,9 +1164,9 @@ const STREAM_SLICE_MS = 6
 /**
  * 流帧队列的上限。
  *
- * 流帧是累积型快照：每一帧都携带"到此为止"的完整文本/思考，foldStream 只依赖最新形态即可收敛，
- * 丢掉中间帧损失的只是若干次中间渲染，不会写错内容。反过来，无界的积压会让每轮 flush 的工作量
- * 随右边界一直涨，最终压垮主线程——所以宁可丢中间帧，也要保住最新一条。
+ * 流帧是**增量** delta（`chunk.text` 只是这一小段，见 dsh-agent-loop 的 `AssistantStreamAttempt`），
+ * 所以队列不能靠"丢中间帧"来压缩——那会直接丢字。见 `compactStreamBacklog`：先无损合并，只有
+ * 合并后仍超限的极端情况才丢帧，并立刻标记 `needsResync` 让整份重拉来补回。
  */
 const MAX_PENDING_STREAMS = 400
 
@@ -1031,28 +1175,127 @@ const STREAM_ERROR_LOG_EVERY = 50
 
 /**
  * @param callback - 要在下一帧执行的工作。
- * @returns 排队句柄；这里只用它判断"是否已经排过队"，不做取消。
+ * @returns 排队句柄；这里只用它判断"是否已经排过队"，以及取消时区分 rAF / 定时器。
  *
  * 测试或非浏览器环境没有 requestAnimationFrame，退化成 16ms 定时器：节奏仍是一帧一次，只是
  * 不再与渲染对齐。这样本模块在没有 DOM 的进程里也能被加载和驱动。
  */
+const rafHandles = new Set()
+
 function nextFrame (callback) {
   if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-    return window.requestAnimationFrame(callback)
+    let handle = 0
+    handle = window.requestAnimationFrame((time) => {
+      // 执行过就从表里摘掉：这张表只用来区分句柄来自哪一路，不该无限增长。
+      rafHandles.delete(handle)
+      callback(time)
+    })
+    rafHandles.add(handle)
+    return handle
   }
   return setTimeout(callback, 16)
 }
 
 /**
- * 把队列压回上限：丢掉最旧的中间帧，保留最新一条。
+ * @returns 这一帧能不能与相邻帧合并，以及合并到哪一路；结构帧（start/end/其他）返回空串。
  *
- * 只在入队时裁剪，flush 中途不裁——否则正在被消费的顺序会被打乱。
+ * 只认 `text-delta` / `reasoning-delta`：它们分别累加到 `state.live.text` 与 `.reasoning`，
+ * 所以「连续的同类 delta 首尾相接」与「逐帧折叠」结果逐字相同。`index` 不参与判断——foldStream
+ * 不看块序号，跨块拼接仍是同一个字符串。
  */
-function trimStreamBacklog () {
-  const overflow = pendingStreams.length - MAX_PENDING_STREAMS
+function mergeKeyOf (frame) {
+  if (frame === null || typeof frame !== 'object') return ''
+  if (frame.type !== 'chunk') return ''
+  const chunk = frame.chunk
+  if (chunk === null || typeof chunk !== 'object') return ''
+  if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') return String(chunk.type)
+  return ''
+}
+
+/**
+ * 把排队中的流帧**无损**合并，把队列压回上限。
+ *
+ * 旧实现（f224ad0）在这里丢最旧的中间帧，理由是"流帧是累积快照，保留最新即可收敛"。这个前提是
+ * 错的：帧里带的是 delta，`foldStream` 做的是 `state.live.text += chunk.text`，丢掉一段就等于把那
+ * 段回复的文字吞掉。合并是等价变形：连续的 text-delta 串成一段文本、reasoning-delta 同理，
+ * `start` / `end` 这些结构帧保持原位，顺序完全不变 —— 帧数从上百条降到个位数，内容一字不少。
+ *
+ * 只有合并后仍然超上限（几百个结构帧交错，正常流里不会出现）才真的丢帧，此时同时置
+ * `needsResync`：丢掉的 delta 无法重建，只能整份重拉。
+ */
+function compactStreamBacklog () {
+  if (pendingStreams.length < 2) return
+  const compacted = []
+  let merged = 0
+  for (const frame of pendingStreams) {
+    const previous = compacted.length > 0 ? compacted[compacted.length - 1] : undefined
+    const key = mergeKeyOf(frame)
+    if (key !== '' && previous !== undefined && mergeKeyOf(previous) === key) {
+      // 同一段回复里连续的同类 delta：拼成一条。文本相加 = 逐帧 += 的等价形式。
+      const chunk = previous.chunk
+      compacted[compacted.length - 1] = { ...previous, chunk: { ...chunk, text: chunk.text + frame.chunk.text } }
+      merged += 1
+      continue
+    }
+    compacted.push(frame)
+  }
+  pendingStreams = compacted
+  state.streamDropped += merged
+  const overflow = compacted.length - MAX_PENDING_STREAMS
   if (overflow <= 0) return
-  pendingStreams = pendingStreams.slice(overflow)
+  // 到这里才是真的丢：合并后仍超上限说明帧结构异常，标记重拉而不是假装没事。
+  pendingStreams = compacted.slice(overflow)
   state.streamDropped += overflow
+  state.needsResync = true
+}
+
+/**
+ * 取消一个已经排好的帧。
+ *
+ * 句柄可能来自 rAF，也可能来自 `nextFrame` 的 setTimeout 回退。必须分清是哪一路：浏览器里
+ * rAF 的 id 与 setTimeout 的 id 都是小整数，用 clearTimeout 去取消一个 rAF id 有可能顺手取消掉
+ * 一个毫不相干的定时器（比如快照进度条那个）。
+ */
+function cancelFrameHandle (handle) {
+  if (handle === undefined) return
+  if (rafHandles.delete(handle)) {
+    window.cancelAnimationFrame(handle)
+    return
+  }
+  clearTimeout(handle)
+}
+
+/**
+ * 丢掉所有待折叠的帧（切换会话时用）。
+ *
+ * 这些帧属于上一个会话，折进新转写就是写错文本；已经排好的帧也要取消，否则恢复后它们还会
+ * 再跑一遍。
+ */
+function dropPendingFrames () {
+  pendingStreams = []
+  pendingEvents = []
+  eventsWaiting = false
+  streamsWaiting = false
+  state.eventBacklog = 0
+  if (streamFlush !== undefined) {
+    cancelFrameHandle(streamFlush)
+    streamFlush = undefined
+  }
+  if (eventsFlush !== undefined) {
+    cancelFrameHandle(eventsFlush)
+    eventsFlush = undefined
+  }
+}
+
+/** 排一次流帧折叠：可见才排，隐藏时只记一笔"恢复后继续"。 */
+function scheduleStreams () {
+  if (!pageVisible()) {
+    if (pendingStreams.length > 0) streamsWaiting = true
+    return
+  }
+  if (streamFlush !== undefined) return
+  streamsWaiting = false
+  streamFlush = nextFrame(flushStreams)
 }
 
 /**
@@ -1060,11 +1303,15 @@ function trimStreamBacklog () {
  *
  * 严格按到达顺序消费，每片控制在 STREAM_SLICE_MS 以内；没排空就续一帧，排空了才把句柄复位。
  * 句柄只在"还有活没干完"时存在，handleFrame 靠它判断要不要重新起跑，所以中途新到的帧追加到
- * 队尾后一定能被同一批剩余工作接上，不会丢也不会乱序。
+ * 队尾后一定能被同一批剩余工作接上，不会丢也不会乱序。隐藏期间一律不消费（见 `pageVisible`）。
  */
 function flushStreams () {
   streamFlush = undefined
   if (pendingStreams.length === 0) return
+  if (!pageVisible()) {
+    streamsWaiting = true
+    return
+  }
   const deadline = nowMs() + STREAM_SLICE_MS
   // 用游标而不是 shift：一帧里要消费几十上百条，从头部反复搬家是没必要的开销。
   let done = 0
@@ -1083,7 +1330,103 @@ function flushStreams () {
     }
   } while (done < pendingStreams.length && nowMs() < deadline)
   if (done > 0) pendingStreams = pendingStreams.slice(done)
-  if (pendingStreams.length > 0) streamFlush = nextFrame(flushStreams)
+  if (pendingStreams.length > 0) scheduleStreams()
+  else streamsWaiting = false
+}
+
+/* ---------------------------------------------------------------- 后台 / 恢复 */
+
+/** 下一次完整快照强制走整表替换（见 `requestResync`）。 */
+let forceSnapshotReplace = false
+
+/**
+ * 请求一次「轻量重拉」：不清空转写、不亮骨架，只丢掉无法安全保留的积压，并换一条连接。
+ *
+ * 只在确实丢过帧时调用。宿主每接受一条新连接都会立刻重发整份窗口快照，所以重连本身就是一次
+ * 对账；`forceSnapshotReplace` 只是保证那份快照一定走整表替换——当前窗口可能中间缺过帧，
+ * 增量对账无法证明它完整，硬追加会把缺口永久留在页面上。
+ * @param reason - 触发原因，进错误条与可观测字段用。
+ */
+function requestResync (reason) {
+  state.needsResync = false
+  state.resyncs += 1
+  pendingEvents = []
+  pendingStreams = []
+  pendingSnapshot = undefined
+  state.eventBacklog = 0
+  eventsWaiting = false
+  streamsWaiting = false
+  if (state.selected === undefined) {
+    // 还没选中会话：没有"当前会话"可重拉，重读一次目录即可。
+    void loadState()
+    return
+  }
+  forceSnapshotReplace = true
+  console.warn(`[remote-control] 队列积压丢失了帧，重新拉取当前会话快照：${reason}`)
+  reopenStream()
+}
+
+/**
+ * 页面隐藏 / 恢复的统一入口。
+ *
+ * 隐藏：立刻停止消费（不排任何帧）——rAF 本来就不执行，显式停摆是为了让"绝不积压任务"成立，
+ * 而不是碰巧成立。同时把流帧合并到最小、事件队列封顶（封顶时由 `handleFrame` 置 needsResync）。
+ * 恢复：**不**一次性清空积压。要么按片继续消费，要么先重拉一份快照——两者都不会产生长任务。
+ */
+function onVisibilityChange () {
+  if (!pageVisible()) {
+    state.hiddenSince = Date.now()
+    if (pendingEvents.length > 0) eventsWaiting = true
+    compactStreamBacklog()
+    if (pendingStreams.length > 0) streamsWaiting = true
+    return
+  }
+  state.hiddenMs = state.hiddenSince === 0 ? 0 : Math.max(0, Date.now() - state.hiddenSince)
+  state.hiddenSince = 0
+  if (state.needsResync) {
+    requestResync('后台期间有帧未能进入状态')
+    return
+  }
+  // 恢复时只起跑，不清空：每个循环仍然一次只跑一片（≤ STREAM_SLICE_MS）。
+  if (eventsWaiting || pendingEvents.length > 0) scheduleEvents()
+  if (streamsWaiting || pendingStreams.length > 0) scheduleStreams()
+  // 隐藏期间被推迟的目录刷新，这时候补一次。
+  if (refreshOnResume) {
+    refreshOnResume = false
+    refreshSoon()
+  }
+}
+
+// 只有真浏览器才挂：单测/Node 里没有 document，这个守卫让 store 仍可被直接 import。
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+}
+
+/* ---------------------------------------------------------------- 错误上报 */
+
+/**
+ * 记一条运行期错误，供 App 顶部错误条显示。
+ *
+ * 页面最怕的不是"报错"，而是"报错了但没人知道"：错误条 + 计数让白屏/半死状态一眼可辨，
+ * 也让用户能把它复制出来，而不是只能说"它就卡住了"。
+ * @param error - 错误对象或可读字符串。
+ * @param source - 来源标签，例如 `vue:render`、`window.error`、`transcript`。
+ * @returns 存进 state 的那段可读文本。
+ */
+export function reportError (error, source = 'runtime') {
+  const message = typeof error === 'string'
+    ? error
+    : String(error?.message ?? error ?? '未知错误')
+  const text = `[${source}] ${message}`.slice(0, 400)
+  state.lastError = text
+  state.lastErrorAt = Date.now()
+  state.errorCount += 1
+  return text
+}
+
+/** 关掉错误条（错误本身仍在控制台里）。 */
+export function clearError () {
+  state.lastError = ''
 }
 
 /** @returns 一帧快照/分片携带的 durable 事件。 */
@@ -1148,6 +1491,7 @@ let pendingSnapshot
 /** 整表替换：唯一会重建转写缓存、并置加载态的路径（真正的窗口变化或首次加载）。 */
 function replaceEvents (frame, incoming) {
   pendingEvents = []
+  state.eventBacklog = 0
   trackSnapshot(frame)
   state.events = incoming
   // 快照是宿主按窗口给的整表，这里不裁剪（裁剪只发生在追加路径上），只把上一次会话的裁剪标志复位。
@@ -1168,6 +1512,13 @@ function replaceEvents (frame, incoming) {
  * @param incoming - 完整的事件窗口。
  */
 function applySnapshot (frame, incoming) {
+  // 重拉回来的第一份完整快照必须整表替换：当前窗口可能中间缺过帧（后台丢帧），增量对账无法
+  // 证明它完整，硬追加会把缺口永久留在页面上。
+  if (forceSnapshotReplace) {
+    forceSnapshotReplace = false
+    replaceEvents(frame, incoming)
+    return
+  }
   const decision = reconcileSnapshot(state.events, incoming)
   if (decision === 'same') {
     state.snapshotSkips += 1
@@ -1184,6 +1535,7 @@ function applySnapshot (frame, incoming) {
         const seq = Number(event?.seq)
         return !Number.isFinite(seq) || seq > last
       })
+      state.eventBacklog = pendingEvents.length
     }
     state.telemetry.running = selectedSession.value?.running === true
     return
@@ -1209,7 +1561,12 @@ function handleFrame (frame) {
     if (pendingSnapshot !== undefined) {
       const more = eventsOf(frame)
       if (more.length > 0) pendingSnapshot.records.push(...more)
-      if (frame.last === true) {
+      // 攒着的分片同样有上限：窗口本身受 MAX_EVENTS 约束，超出说明这份快照已经不可信。
+      if (pendingSnapshot.records.length > MAX_EVENTS) {
+        pendingSnapshot = undefined
+        state.needsResync = true
+      }
+      if (frame.last === true && pendingSnapshot !== undefined) {
         const incoming = pendingSnapshot.records
         pendingSnapshot = undefined
         applySnapshot(frame, incoming)
@@ -1232,15 +1589,22 @@ function handleFrame (frame) {
     // next frame: a streaming turn emits many events per second and each append used to re-render every
     // row, which is what made a long Session freeze the tab.
     foldTelemetry(frame.event)
+    // 事件帧不可丢：到上限就不再接收，改标记 needsResync 由重拉补回（见 MAX_PENDING_EVENTS）。
+    if (pendingEvents.length >= MAX_PENDING_EVENTS) {
+      state.eventsDeferred += 1
+      state.needsResync = true
+      return
+    }
     pendingEvents.push(frame.event)
-    if (pendingFlush === undefined) pendingFlush = window.requestAnimationFrame(flushEvents)
+    state.eventBacklog = pendingEvents.length
+    scheduleEvents()
     return
   }
   if (frame.type === 'assistant-stream') {
     pendingStreams.push(frame.frame)
-    // 先入队再裁剪：新到的一条如果在队尾，就一定不会被刚做的这次裁剪丢掉。
-    trimStreamBacklog()
-    if (streamFlush === undefined) streamFlush = nextFrame(flushStreams)
+    // 隐藏期间或队列过长时就地无损合并：队列长度与"后台待了多久"无关，内容一字不丢。
+    if (!pageVisible() || pendingStreams.length > MAX_PENDING_STREAMS) compactStreamBacklog()
+    scheduleStreams()
   }
 }
 
@@ -1312,19 +1676,58 @@ function foldStream (frame) {
   }
 }
 
+/** 正在进行的发送请求，可被 `cancelSend` 中止。 */
+let sendAbort
+
+/**
+ * 发送消息的等待上限。
+ *
+ * 比默认的 20 秒短：弱网下"发出去没有"必须尽快有结论，否则输入框会一直挂在"发送中"。
+ * 失败时 `sendPrompt` 抛错、调用方（ComposerBar）保留草稿并恢复可点，读者重试即可。
+ */
+const SEND_TIMEOUT_MS = 12_000
+
 /**
  * Send a message into the selected Session.
  * @param content - prompt content parts (`text`, optional `image` attachments).
  * @param mode - `queue` or `steer`.
+ * @param options - `timeoutMs` to override the wait, `signal` to cancel from outside.
  */
-export async function sendPrompt (content, mode = 'queue') {
+export async function sendPrompt (content, mode = 'queue', options = {}) {
   state.actionError = ''
+  const controller = new AbortController()
+  sendAbort = controller
+  // 外部信号与自己的取消器合成一个：任一方取消都立即结束等待。
+  const signal = options.signal === undefined
+    ? controller.signal
+    : AbortSignal.any([controller.signal, options.signal])
   try {
-    await api('/api/send', { method: 'POST', body: { sessionId: state.selected, content, mode } })
+    await api('/api/send', {
+      method: 'POST',
+      body: { sessionId: state.selected, content, mode },
+      signal,
+      timeoutMs: options.timeoutMs ?? SEND_TIMEOUT_MS,
+    })
+    // 发送成功（宿主已收下）：转录面板据此把自己贴回底部，读者马上能看到自己刚发的那条。
+    state.promptSendCount += 1
   } catch (error) {
     state.actionError = String(error.message ?? error)
+    // 交给调用方处理：输入框的草稿还在，读者可以直接重试。
     throw error
+  } finally {
+    if (sendAbort === controller) sendAbort = undefined
   }
+}
+
+/**
+ * 取消正在进行的发送。
+ *
+ * 弱网下读者可能不想再等一个已经超时的请求了；取消后 `sendPrompt` 以「已取消」失败，
+ * 输入框按失败路径恢复，不会卡在「发送中」。
+ */
+export function cancelSend () {
+  sendAbort?.abort()
+  sendAbort = undefined
 }
 
 /** Stop the running turn. */
@@ -1379,28 +1782,101 @@ export async function selectPermission (name) {
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 /**
- * Read one picked or pasted image into the shape the Host admits.
+ * 图片硬上限：与宿主 `/api/attachment` 的 MAX_UPLOAD_BODY（16MB）保持一致。
+ * 超过就直接拒绝，连读都不读 —— 先读进内存再报错，正是"卡死"的开始。
+ */
+export const MAX_IMAGE_BYTES = 16 * 1024 * 1024
+/** 超过这个字节数才做降采样；小图原样上传，省一次解码/编码。 */
+const DOWNSCALE_OVER_BYTES = 1.5 * 1024 * 1024
+/** 降采样后的最长边。1600 足够模型看清正文，也远低于手机照片的 4000+。 */
+const MAX_IMAGE_EDGE = 1600
+/** WebP 质量：0.9 对截图/文字几乎无损，体积通常只有原图的 1/3–1/8。 */
+const IMAGE_QUALITY = 0.9
+
+/** @returns 一位小数的 MB，用于可读报错。 */
+function megabytes (bytes) {
+  return (Number(bytes) / (1024 * 1024)).toFixed(1)
+}
+
+/**
+ * 把一张大图压成「上传用」的小 blob。
  *
- * Image bytes travel *inside* the prompt (`{ type: 'image', mediaType, data, name? }`), exactly as
- * the Desktop composer submits them, and the Host stores them while admitting the submission. No
- * pre-upload round trip is involved, so there is nothing to clean up when the draft is discarded.
+ * 一次 `createImageBitmap`（浏览器在后台线程解码）+ 一次 `drawImage` + 一次 `convertToBlob`
+ * （编码也在后台线程），中间不产生额外的 JS 副本。相比「先 data URL 再让 <img> 解码全尺寸」，
+ * 省掉了两次全量解码和数 MB 的字符串。失败就退回原始 blob：宁可传大一点，也不要让粘贴失败。
+ * @param file - 原始图片。
+ * @returns `{ blob, mediaType, width?, height? }`。
+ */
+async function shrinkImage (file) {
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') {
+    // 老浏览器没有这套 API：原样上传（仍然是二进制，绝不退回 base64）。
+    return { blob: file, mediaType: file.type }
+  }
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height))
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = new OffscreenCanvas(width, height)
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height)
+    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: IMAGE_QUALITY })
+    // 压完反而更大（小图、或本来就压得很好的图）：保留原图。
+    if (blob.size >= file.size) return { blob: file, mediaType: file.type, width: bitmap.width, height: bitmap.height }
+    return { blob, mediaType: 'image/webp', width, height }
+  } catch {
+    return { blob: file, mediaType: file.type }
+  } finally {
+    bitmap.close?.()
+  }
+}
+
+/**
+ * 暂存一张图片附件：全程不读 base64，只留 blob 引用 + 一个 object URL 供预览。
+ *
+ * 旧实现用 `readAsDataURL` 把 10MB 图变成 13.5M 字符的字符串（UTF-16 约 27MB 堆占用），再切一份
+ * base64 给发送用；粘贴两三张就是几十上百 MB 的驻留，加上全尺寸 data URL 解码，主线程直接停住
+ * （实测一张 10MB 图光 data URL 解码就占住主线程 24ms，且要重复一次用于预览）。
+ * 现在：预览用 `URL.createObjectURL`（零拷贝）、发送走二进制、发送载荷里只带 uploadId。
  * @param file - the picked or pasted image.
- * @returns the staged attachment: bytes, media type, and a local preview URL.
+ * @returns `{ uploadId, previewUrl, name, mediaType, size, width?, height? }`；previewUrl 用完必须 revoke。
  */
 export async function stageImage (file) {
   if (!IMAGE_MEDIA_TYPES.has(file.type)) throw new Error(`不支持的图片类型：${file.type === '' ? '未知' : file.type}`)
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => { resolve(String(reader.result)) }
-    reader.onerror = () => { reject(new Error('读取图片失败')) }
-    reader.readAsDataURL(file)
-  })
-  return {
-    mediaType: file.type,
-    data: dataUrl.slice(dataUrl.indexOf(',') + 1),
-    name: file.name === '' ? undefined : file.name,
-    preview: dataUrl,
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error(`图片过大（${megabytes(file.size)} MB），上限 ${String(MAX_IMAGE_BYTES / (1024 * 1024))} MB`)
   }
+  if (file.size === 0) throw new Error('这张图片是空的，无法发送')
+  const name = file.name === '' ? undefined : file.name
+  // GIF 不降采样：canvas 会把动图压成一张静帧。
+  const prepared = file.type === 'image/gif' || file.size <= DOWNSCALE_OVER_BYTES
+    ? { blob: file, mediaType: file.type }
+    : await shrinkImage(file)
+  // 预览和上传共用这一份 blob：一个 object URL，没有第二份字节。
+  const previewUrl = URL.createObjectURL(prepared.blob)
+  try {
+    const uploaded = await uploadImage(prepared.blob, { mediaType: prepared.mediaType, name })
+    const uploadId = typeof uploaded?.uploadId === 'string' ? uploaded.uploadId : ''
+    if (uploadId === '') throw new Error('上传失败：宿主没有返回图片引用')
+    return {
+      uploadId,
+      previewUrl,
+      name,
+      mediaType: prepared.mediaType,
+      size: prepared.blob.size,
+      ...(typeof prepared.width === 'number' ? { width: prepared.width } : {}),
+      ...(typeof prepared.height === 'number' ? { height: prepared.height } : {}),
+    }
+  } catch (error) {
+    // 上传失败就别留着 object URL，否则每失败一次漏一份 blob。
+    URL.revokeObjectURL(previewUrl)
+    throw error
+  }
+}
+
+/** 释放一张附件的预览 URL（移除附件、发送成功或卸载时调用）。 */
+export function releaseImagePreview (attachment) {
+  const url = attachment?.previewUrl
+  if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
 
 /* ---------------------------------------------------------------- session management */
