@@ -47,6 +47,41 @@ function baseName (value) {
  * @param text - raw text.
  * @returns text with image references promoted.
  */
+/**
+ * Turn local markdown image syntax into an HTML tag *before* markdown parsing.
+ *
+ * Markdown treats a backslash as an escape, so `![x](D:\\Projects\\.meta\\a.png)` parses to a src of
+ * `D:\\Projects.meta\\a.png` — the separator in front of the dot is consumed as an escape and the image
+ * resolves to a directory that does not exist. Promoting bare paths was not enough: when the model writes
+ * image syntax itself, marked is the thing eating the backslash. Converting first keeps the path intact,
+ * because a backslash inside an HTML attribute is literal.
+ *
+ * Remote, data: and root-absolute sources keep their original syntax: markdown renders them correctly.
+ * @param text - raw markdown.
+ * @returns markdown with local images already written as HTML tags.
+ */
+function preparseLocalImages (text) {
+  return String(text ?? '').replace(/!\[([^\]]*)\]\(\s*<?([^)>]+?)>?\s*\)/gu, (match, alt, source) => {
+    const trimmed = source.trim()
+    if (trimmed === '') return match
+    // Two-character scheme or a slash: leave it to markdown. A single letter plus colon is a drive.
+    if (/^(?:[a-z][a-z0-9+.-]+:|\/\/|\/)/iu.test(trimmed)) return match
+    // Only paths that name a file; a bare word in parentheses is not an image.
+    const pathOnly = trimmed.split(/[?#]/u)[0]
+    if (!/\.[a-z0-9]{1,5}$/iu.test(pathOnly)) return match
+    return '<img src="' + escapeAttribute(trimmed) + '" alt="' + escapeAttribute(alt) + '">'
+  })
+}
+
+/** @returns a string safe to place inside a double-quoted HTML attribute. */
+function escapeAttribute (value) {
+  return String(value)
+    .replace(/&/gu, '&amp;')
+    .replace(/"/gu, '&quot;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+}
+
 export function promoteImageReferences (text) {
   let inFence = false
   return String(text ?? '')
@@ -63,7 +98,10 @@ export function promoteImageReferences (text) {
         if (existing !== undefined || code !== undefined) return match
         const source = url !== undefined ? url : file
         if (source === undefined) return match
-        return `![${baseName(source)}](${source})`
+        // An HTML tag, not markdown syntax: markdown treats a backslash as an escape, so a Windows path like
+        // D:\\Projects\\.meta\\shot.png lost the separator in front of the dot and resolved to a directory
+        // that does not exist. Inside an HTML attribute the backslash is literal and survives.
+        return `<img src="${escapeAttribute(source)}" alt="${escapeAttribute(baseName(source))}">`
       })
     })
     .join('\n')
@@ -75,7 +113,13 @@ export function promoteImageReferences (text) {
  */
 export function imageReferencesIn (text) {
   const found = []
-  for (const match of promoteImageReferences(text).matchAll(/!\[[^\]]*\]\(<?([^)>]+)>?\)/gu)) {
+  const promoted = promoteImageReferences(text)
+  // Two shapes now: the markdown form that was already here, and the HTML tag this module emits.
+  for (const match of promoted.matchAll(/<img\b[^>]*?\ssrc="([^"]*)"/giu)) {
+    const source = match[1].trim()
+    if (source !== '' && !found.includes(source)) found.push(source)
+  }
+  for (const match of promoted.matchAll(/!\[[^\]]*\]\(<?([^)>]+)>?\)/gu)) {
     const source = match[1].trim()
     if (source !== '' && !found.includes(source)) found.push(source)
   }
@@ -90,6 +134,39 @@ export function imageReferencesIn (text) {
  * 超长内容本来也读不完，所以超过就只渲染前一段，并在末尾说清楚发生了什么。
  */
 const MAX_RENDER_CHARS = 50_000
+
+/**
+ * Route local image sources through the Host.
+ *
+ * A Session often refers to screenshots by path — `preview.png`, `docs/shot.png`, or a Windows absolute
+ * path — and an <img> pointing at one resolves against the page's URL, which is never where the file is.
+ * The Host's `/api/image` resolves a path inside a workspace and serves the bytes from this origin, so the
+ * only thing missing was telling it which path to look for.
+ *
+ * Getting this right is mostly about *not* rewriting:
+ *   - `http:`, `data:` and `blob:` already load, and a single letter followed by a colon is a drive letter,
+ *     not a scheme, so the scheme test requires at least two characters.
+ *   - A source starting with one slash is already origin-absolute. An earlier version rewrote those too,
+ *     which wrapped `/api/image?path=…` inside another `/api/image?path=…`; the doubled request returned
+ *     nothing, so every local image stayed broken.
+ * @param html - rendered markdown.
+ * @returns the same html with local image sources rewritten.
+ */
+
+function proxyLocalImages(html) {
+  return html.replace(/<img\b([^>]*?)\ssrc="([^"]*)"/giu, (match, before, source) => {
+    const trimmed = source.trim()
+    if (trimmed === '') return match
+    // Already proxied: rewriting again would nest the query into itself.
+    if (trimmed.startsWith('/api/image')) return match
+    // Origin-absolute, protocol-relative, or a fragment: nothing to resolve.
+    if (trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.startsWith('#')) return match
+    // A real scheme. A single letter with a colon is a drive, not a scheme.
+    if (/^[a-z][a-z0-9+.-]+:/iu.test(trimmed)) return match
+    const query = new URLSearchParams({ path: trimmed })
+    return '<img' + before + ' src="/api/image?' + query.toString() + '"'
+  })
+}
 
 /**
  * @param text - 原始 markdown。
@@ -108,12 +185,14 @@ function clampForRender (text) {
 export function renderMarkdown (text) {
   const source = String(text ?? '')
   const clamped = clampForRender(source)
-  const html = marked.parse(promoteImageReferences(clamped.text))
-  const safe = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+  const html = marked.parse(preparseLocalImages(promoteImageReferences(clamped.text)))
+  // Rewrite here, once, right after sanitising: both exits below get it, and the truncation notice that
+  // follows is fixed text this module owns, so it does not need to pass through image rewriting.
+  const safe = proxyLocalImages(DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }))
   if (clamped.omitted === 0) return safe
   // 提示拼接在净化之后：它是本模块自己的固定文本，不含任何模型输出，不需要再过一次 DOMPurify。
   // 后半句给出原文长度，读者才知道自己少看了多少。
-  return `${safe}<p class="rc-md-truncated">内容较长，仅渲染前 ${String(clamped.text.length)} 字符（原文 ${String(source.length)} 字符，已省略 ${String(clamped.omitted)} 字符）</p>`
+  return `${safe}<p class="rc-md-truncated">内容较长，仅渲染前 ${String(clamped.text.length)} 字符（原文 ${String(source.length)} 字符）</p>`
 }
 
 /** @returns the first line of a possibly long string, trimmed for a collapsed header. */
