@@ -62,29 +62,27 @@ export function setScrollRoot (element) {
 function toggle (entries, value) {
   chain = chain.then(async () => {
     const box = scrollRoot
-    const viewportTop = box === undefined ? 0 : box.getBoundingClientRect().top
-    const measured = entries.map((entry) => {
-      const rect = entry.node.getBoundingClientRect()
-      return {
-        // Only a row above the reader moves what they are looking at.
-        above: rect.top < viewportTop,
-        height: entry.node.offsetHeight,
-      }
-    })
-    const scrollBefore = box?.scrollTop ?? 0
+    if (entries.length === 0) return
+    // 一批只量一次。这批行在文档里是连续的，量第一行的位置就知道它们是否在读者上方；整批造成的
+    // 高度变化用「切换前后的 scrollHeight 差」一次算出来，不必逐行 offsetHeight、也不需要在
+    // nextTick 之后再逐行复读一遍（每读一次 offsetHeight 都强制一次布局，500 行就是 500 次）。
+    const first = entries[0]
+    let above = false
+    let heightBefore = 0
+    let scrollBefore = 0
+    if (box !== undefined) {
+      above = first.node.getBoundingClientRect().top < box.getBoundingClientRect().top
+      heightBefore = box.scrollHeight
+      scrollBefore = box.scrollTop
+    }
     for (const entry of entries) {
       if (entry.alive) entry.rendered.value = value
     }
-    if (box === undefined) return
+    if (box === undefined || !above) return
     await nextTick()
-    // Reading the offset now forces the pending layout, which is where the browser's own anchoring, if it
-    // ran, will already be visible.
+    // 读一次 scrollTop / scrollHeight：浏览器自己的滚动锚定若已生效，scrollTop 会先动，这时不再补偿。
     const anchored = box.scrollTop !== scrollBefore
-    let shift = 0
-    entries.forEach((entry, index) => {
-      if (!measured[index].above) return
-      shift += entry.node.offsetHeight - measured[index].height
-    })
+    const shift = box.scrollHeight - heightBefore
     if (!anchored && shift !== 0) box.scrollTop = scrollBefore + shift
   }).catch(() => {})
   return chain

@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onErrorCaptured, onMounted, onUnmounted, ref, watch } from 'vue'
 import { consumeLinkToken, login } from './lib/api.js'
-import { loadModels, loadState, state } from './lib/store.js'
-import { mobile } from './lib/layout.js'
+import { clearError, loadModels, loadState, reportError, state } from './lib/store.js'
+import { mobileLayout as mobile } from './lib/layout.js'
 import { loadMessage, loadPhase, SLOW_AFTER_MS } from './lib/loading.js'
 import AppIcon from './components/AppIcon.vue'
 import SidebarPane from './components/SidebarPane.vue'
@@ -31,6 +31,29 @@ const media = window.matchMedia('(prefers-color-scheme: dark)')
 /** True once the very first request has been waiting long enough to be worth admitting. */
 const bootSlow = ref(false)
 let bootTimer
+
+/**
+ * 错误条要显示的文本；空串表示不显示。
+ *
+ * 优先显示最近一条运行期错误；没有错误但转写曾经降级过时，给一条说明——否则读者只会看到一段
+ * 莫名变短的对话，而不知道发生了什么。
+ */
+const errorText = computed(() => {
+  if (state.lastError !== '') return state.lastError
+  if (state.transcriptDegraded) return '转写渲染失败，已降级显示；切换会话或刷新可恢复'
+  return ''
+})
+
+/**
+ * 兜住子树里的渲染异常。
+ *
+ * 返回 false 阻止继续向上传播：这是「不白屏」的关键一步——异常一旦冒到根上，Vue 会把出错的那棵树
+ * 拆掉，页面上只剩背景色。错误本身仍然记进 `state.lastError`（错误条可见、可关）。
+ */
+onErrorCaptured((error, _instance, info) => {
+  reportError(error, `vue:${info}`)
+  return false
+})
 
 watch(() => state.booted, (value) => {
   window.clearTimeout(bootTimer)
@@ -62,8 +85,8 @@ function applyTheme () {
 
 /**
  * The column is persistent in desktop mode and a drawer in mobile mode. Mobile mode is decided by
- * `lib/layout.js`: either the viewport is narrow, or the composer toolbar reported that its desktop
- * controls no longer fit.
+ * `lib/layout.js` and — after the feedback-loop fix — **only** by the viewport breakpoint. The composer's
+ * own "controls do not fit" verdict feeds `compact` (icon-only controls), never the layout mode.
  */
 const sidebarOpen = computed(() => (mobile.value ? drawer.value : sidebar.value))
 
@@ -100,10 +123,14 @@ const asideStyle = computed(() => {
 const filesStyle = computed(() => {
   const open = filesOpen.value
   if (!mobile.value) {
+    // 桌面上右栏是**文档流里的固定列**，会挤压中间列。
+    //
+    // 这个挤压曾经是卡死的扳机：它让 composer 判定"放不下"→ 翻转 mobile → 两栏抽离文档流 →
+    // 中间列变宽 → 再次判定"放得下"→ 来回互踢。现在回路已经断开（布局只读视口断点 mobileLayout，
+    // composerOverflow 只负责收起控件），所以挤压不再能触发布局翻转；而实测挤压本身的重排只要
+    // 1.5–2.2ms，代价可以接受，换来的是真正的分栏而不是浮在内容上的覆盖层。
     return {
-      // `relative`, not `static`: the resize handle is absolutely positioned inside this column, and a
-      // static ancestor gives it no containing block — which is why it was invisible and could not be
-      // grabbed. It stays in flow, so the flex layout is unchanged.
+      // `relative`：拖拽把手要相对这一列定位，`static` 会让它失去包含块。
       position: 'relative',
       width: open ? `${String(filesWidth.value)}rem` : '0rem',
       padding: open ? '0.5rem' : '0rem',
@@ -270,7 +297,7 @@ async function submitToken () {
 <template>
   <div
     class="relative h-full"
-    :class="[state.lightweight ? 'lightweight' : '', state.telemetry.running ? 'streaming' : '']"
+    :class="[state.lightweight ? 'lightweight' : '', state.telemetry.running ? 'streaming' : '', filesOpen ? 'files-open' : '']"
     @touchstart.passive="onTouchStart"
     @touchend.passive="onTouchEnd"
   >
@@ -283,6 +310,25 @@ async function submitToken () {
       <div class="drift-b absolute left-1/3 top-1/2 h-80 w-80 rounded-full bg-cyan-300/25 blur-3xl dark:bg-cyan-500/20" style="animation-delay: -9s" />
       <div class="drift-a absolute bottom-1/4 right-1/4 h-72 w-72 rounded-full bg-violet-300/25 blur-3xl dark:bg-violet-500/20" style="animation-delay: -14s" />
       <div class="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/30 dark:from-black/30 dark:via-transparent dark:to-black/40" />
+    </div>
+
+    <!-- 运行期错误条：任何异常都不该变成白屏，这里给一条可关闭的说明（层级低于启动遮罩）。 -->
+    <div
+      v-if="errorText !== ''"
+      class="pointer-events-none fixed inset-x-0 top-0 z-[120] flex justify-center px-3 pt-2"
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="panel-tight pointer-events-auto flex max-w-2xl items-start gap-2 px-3 py-2 text-[12px] text-rose-600 dark:text-rose-300">
+        <span class="min-w-0 flex-1 break-words">{{ errorText }}</span>
+        <span v-if="state.errorCount > 1" class="shrink-0 opacity-70">×{{ state.errorCount }}</span>
+        <button
+          type="button"
+          class="shrink-0 cursor-pointer rounded px-1.5 opacity-70 hover:opacity-100"
+          title="关闭"
+          @click="clearError"
+        >✕</button>
+      </div>
     </div>
 
     <!-- Boot: the first state request takes seconds on a slow link, and a blank page reads as broken. -->
@@ -334,8 +380,9 @@ async function submitToken () {
       </div>
     </div>
 
-    <div v-else class="flex h-full min-h-0">
-      <aside class="z-30 min-h-0 shrink-0 transition-all duration-300 ease-out" :style="asideStyle">
+    <div v-else class="relative flex h-full min-h-0">
+      <!-- 左栏只过渡宽度：`transition-all` 会把 padding/opacity 也一起过渡，每帧都触发额外样式重算。 -->
+      <aside class="z-30 min-h-0 shrink-0 transition-[width] duration-300 ease-out" :style="asideStyle">
         <div class="panel-tight h-full w-full overflow-hidden">
           <SidebarPane @select="drawer = false" @close="toggleSidebar" />
         </div>
@@ -360,9 +407,14 @@ async function submitToken () {
         @click="toggleFiles"
       />
 
-      <!-- The right column keeps its box while closed on desktop, so the width can animate. -->
+      <!--
+        The right column keeps its box while closed on desktop, so the width can animate.
+        用 `v-show` 而不是 `v-if`：关闭只是隐藏，RightPane/FilePane 不销毁 —— 再打开时不会重挂一次、
+        也不会重新拉一遍目录（那正是「打开右栏」最重的一段）。
+      -->
       <aside
-        v-if="filesOpen"
+        v-show="filesOpen"
+        :aria-hidden="!filesOpen"
         class="relative z-30 min-h-0 shrink-0"
         :class="filesResizing ? '' : 'transition-[width] duration-300 ease-out'"
         :style="filesStyle"
@@ -386,7 +438,7 @@ async function submitToken () {
             class="absolute top-1/2 left-1/2 h-16 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/15 transition-all duration-150 group-hover:w-1.5 group-hover:bg-blue-500 dark:bg-white/25"
           />
         </div>
-        <div class="panel-tight h-full w-full overflow-hidden">
+        <div class="panel-solid h-full w-full overflow-hidden">
           <RightPane @close="toggleFiles" />
         </div>
       </aside>

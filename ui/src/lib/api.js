@@ -19,7 +19,8 @@ export class UnauthorizedError extends Error {
 /**
  * Perform one JSON request.
  * @param path - absolute path on this origin.
- * @param options - optional method and JSON body.
+ * @param options - optional method, JSON body, `signal`（可取消）, `timeoutMs`, `project`（投影规格，
+ *   默认按路由查 `PROJECTIONS`）。
  * @returns the parsed response body.
  */
 /**
@@ -40,16 +41,68 @@ const DEFAULT_TIMEOUT_MS = 20_000
 const MAX_RESPONSE_CHARS = 8 * 1024 * 1024
 
 /**
+ * 各路由的投影规格：只保留页面真正会读的字段。
+ *
+ * 为什么在解析这一层做：Worker 解析完要把结果结构化克隆回主线程，克隆成本与对象体量成正比。
+ * 先在 Worker 里裁掉今天没人读的字段，回传和克隆的就是裁完那一份。
+ *
+ * 规格是纯数据（可结构化克隆送进 Worker）：`true` = 整棵保留，对象 = 递归保留列出的键，数组的
+ * 元素沿用同一个规格。不确定某个字段有没有人读时**保留它**——少省一点字节，比让页面读到 undefined
+ * 便宜得多。没有列在这里的路由一律不裁剪（形状完全按宿主给的）。
+ */
+const PROJECTIONS = {
+  // 页面读：bind / sessions / workspaces / pending / telemetry / 管理集合 / urls（候选地址展示）。
+  '/api/state': {
+    bind: true,
+    // 会话行只读这 6 个字段（SidebarPane / FilePane / store 的访问点已逐个核对）：
+    // id、title、updatedAt、running、origin、workspaceId。宿主还会额外带 cwd、日志路径、
+    // 生命周期与调试元数据，那些一个都不进页面。
+    sessions: { id: true, title: true, updatedAt: true, running: true, origin: true, workspaceId: true },
+    workspaces: true,
+    pending: true,
+    telemetry: true,
+    pinnedSessionIds: true,
+    archivedSessionIds: true,
+    managed: true,
+    urls: true,
+  },
+  // 页面只读 records（每条只用到 type 与 event）和 hasMore；记录上的其它元数据没人读。
+  '/api/older': {
+    records: { type: true, event: true },
+    hasMore: true,
+  },
+}
+
+/** 投影表对外只读暴露，便于脚本量测「投影前后」的体积（不参与运行期逻辑）。 */
+export const ROUTE_PROJECTIONS = PROJECTIONS
+
+/**
+ * 回传分片的字符预算：约 256 KB。
+ *
+ * 一次 structured clone 的耗时与体量近似线性。2.8MB 的 `/api/older` 一次性克隆是几十毫秒的长任务；
+ * 切成十几片之后，每条消息只搬一小段，主线程每次回到事件循环的都很快（分片数量与单片上限见
+ * `worker-client.js` 的 `splitValueForTransfer`，单片条目不超过 2000）。
+ */
+const TRANSFER_CHUNK_CHARS = 256 * 1024
+
+/** @returns 去掉查询串的路由，用于查投影表。 */
+function routeOf (path) {
+  const at = path.indexOf('?')
+  return at === -1 ? path : path.slice(0, at)
+}
+
+/**
  * 解析响应正文。
  *
  * 走 Worker 的理由：`/api/older` 单次 2.8MB、`/api/state` 也有几十 KB，在主线程 `JSON.parse`
  * 就是一次实打实的长任务（输入、滚动、高亮全部停摆）。单例维护在 worker-client.js 内部，
  * 所以这里直接取即可，不再自己缓存一份——两处各缓存会得到两个 Worker。
  * @param text - 已经读成文本的响应正文。
+ * @param project - 投影规格；`undefined` 表示原样返回。
  * @returns 解析出的值。
  */
-async function parseResponseBody (text) {
-  const { value, error } = await createJsonParser().parse(text)
+async function parseResponseBody (text, project) {
+  const { value, error } = await createJsonParser().parse(text, { project, chunkChars: TRANSFER_CHUNK_CHARS })
   // 失败一定要变成一条可读的 Error 抛给调用方，而不是让 SyntaxError 自己往上冒。
   if (error !== undefined) throw new Error(`响应解析失败：${error}`)
   return value
@@ -80,8 +133,47 @@ export async function api (path, options = {}) {
   if (text.length > MAX_RESPONSE_CHARS) {
     throw new Error(`响应过大（${(text.length / (1024 * 1024)).toFixed(1)} MB），已拒绝解析`)
   }
-  const payload = text === '' ? {} : await parseResponseBody(text)
+  const payload = text === '' ? {} : await parseResponseBody(text, options.project ?? PROJECTIONS[routeOf(path)])
   // 用 `?.` 是因为合法 JSON 也可能是 `null`：那不该变成一条 TypeError。
+  if (!response.ok) throw new Error(payload?.error ?? `HTTP ${String(response.status)}`)
+  return payload
+}
+
+/**
+ * 上传一张图片的**原始字节**。
+ *
+ * 为什么单独一条路：`api()` 只会 `JSON.stringify` 一个 body，图片走那条路就必须先
+ * `readAsDataURL` 变成数 MB 的字符串（10MB 图 ≈ 13.5M 字符 ≈ 27MB 堆上驻留，再被 stringify
+ * 复制一次），主线程和 GC 一起遭殃。这里 body 直接是 `Blob`，浏览器负责流式发送，页面不经过
+ * base64、也不拼 JSON；宿主回一个短小的 `{ uploadId, attachment }` 引用，发送时只引用它。
+ * @param source - 图片字节（`File` / `Blob`）。
+ * @param options - `{ mediaType?, name?, signal?, timeoutMs? }`。
+ * @returns Host 的回执：`{ uploadId, attachment, mediaType, name, size, width?, height? }`。
+ */
+export async function uploadImage (source, options = {}) {
+  const mediaType = options.mediaType ?? (typeof source.type === 'string' && source.type !== '' ? source.type : 'application/octet-stream')
+  const query = new URLSearchParams({ mediaType })
+  if (typeof options.name === 'string' && options.name !== '') query.set('name', options.name)
+  const signals = [AbortSignal.timeout(options.timeoutMs ?? 120_000)]
+  if (options.signal !== undefined) signals.push(options.signal)
+  let response
+  try {
+    response = await fetch(`/api/attachment?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'x-rc': '1', 'content-type': mediaType },
+      // 关键：body 就是 Blob 本身。浏览器按字节流发送，既不 base64 也不进 JS 堆。
+      body: source,
+      signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals),
+    })
+  } catch (error) {
+    if (options.signal?.aborted === true) throw new Error('已取消')
+    if (error?.name === 'TimeoutError') throw new Error('图片上传超时，请重试')
+    if (error?.name === 'AbortError') throw new Error('已取消')
+    throw new Error('无法连接到宿主，请检查网络')
+  }
+  if (response.status === 401) throw new UnauthorizedError()
+  const text = await response.text()
+  const payload = text === '' ? {} : await parseResponseBody(text)
   if (!response.ok) throw new Error(payload?.error ?? `HTTP ${String(response.status)}`)
   return payload
 }
@@ -89,12 +181,16 @@ export async function api (path, options = {}) {
 /**
  * Exchange a token from the URL for the session cookie.
  * @param token - the `?k=` value.
+ *
+ * 必须带超时：这一步在启动路径上，弱网下没有超时的 fetch 会一直挂着，页面就永远停在启动骨架里
+ * （看起来就是一片黑）。失败就明确失败，调用方才能提示令牌无效或网络不可达。
  */
 export async function login (token) {
   const response = await fetch('/api/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rc': '1' },
     body: JSON.stringify({ token }),
+    signal: AbortSignal.timeout(15_000),
   })
   if (!response.ok) throw new Error('令牌不正确')
 }

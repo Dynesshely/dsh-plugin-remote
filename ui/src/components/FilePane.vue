@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../lib/api.js'
 import { codeHtml } from '../lib/highlight.js'
 import { renderMarkdown } from '../lib/markdown.js'
-import { mobile } from '../lib/layout.js'
+import { mobileLayout as mobile } from '../lib/layout.js'
 import { state } from '../lib/store.js'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
@@ -26,6 +26,23 @@ const OFFICE_SHEET = new Set(['.xlsx', '.xls'])
 const workspaceId = ref('')
 const path = ref('')
 const listing = ref(undefined)
+/**
+ * 分片挂载的行数窗口。
+ *
+ * 实测（headless Chrome + 心跳探针）：500 行的目录点开后首帧 stall 41ms，其中「Vue 挂载 500 行 +
+ * 500 个 AppIcon 组件」这一步同步就占 39ms，Layout/Paint 再多 12+9ms。首帧只挂 80 行、其余每帧追加
+ * 120 行之后，这段同步长任务被摊到几帧里，首帧回到 10ms 级；行本身再加 `content-visibility: auto`，
+ * 屏幕外的行不参与布局与绘制。
+ */
+const rowLimit = ref(0)
+/** 首屏挂载的行数。 */
+const ROW_FIRST_BATCH = 60
+/** 之后每一帧追加的行数（一帧不超过 100 行：实测 200 行/帧仍会留下一段 ~35ms 的长任务）。 */
+const ROW_BATCH_STEP = 100
+/** 还在排队的分片追加帧。 */
+let rowGrowFrame
+/** 当前真正渲染的行（分片窗口）。 */
+const visibleEntries = computed(() => (listing.value?.entries ?? []).slice(0, rowLimit.value))
 const loading = ref(false)
 const error = ref('')
 /**
@@ -127,11 +144,35 @@ async function open (target) {
     const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
     listing.value = await api(`/api/files?${query.toString()}`, { timeoutMs: 20_000 })
     path.value = String(listing.value.path ?? target)
+    // 目录出现这一帧只挂首批行，剩下的分帧补：500 行一次性 patch 是一段 40ms 的同步长任务。
+    rowLimit.value = Math.min(listing.value?.entries?.length ?? 0, ROW_FIRST_BATCH)
+    scheduleRowGrow()
   } catch (problem) {
     error.value = String(problem.message ?? problem)
   } finally {
     loading.value = false
   }
+}
+
+/** 分帧把剩下的行挂上。 */
+function growRows () {
+  const total = listing.value?.entries?.length ?? 0
+  if (rowLimit.value >= total) {
+    rowGrowFrame = undefined
+    return
+  }
+  rowLimit.value = Math.min(total, rowLimit.value + ROW_BATCH_STEP)
+  rowGrowFrame = requestAnimationFrame(growRows)
+}
+
+/** 起跑行分片；切目录时先取消上一轮还没跑完的追加。 */
+function scheduleRowGrow () {
+  if (rowGrowFrame !== undefined) {
+    cancelAnimationFrame(rowGrowFrame)
+    rowGrowFrame = undefined
+  }
+  if (rowLimit.value >= (listing.value?.entries?.length ?? 0)) return
+  rowGrowFrame = requestAnimationFrame(growRows)
 }
 
 /**
@@ -661,7 +702,7 @@ watch(() => state.selected, () => {
         <p v-if="hasSelection" class="px-1.5 pt-1 text-[10px] text-zinc-400">已选中 {{ selection.size }} 项</p>
         <div v-else ref="listBox" class="relative">
           <ul class="space-y-0.5">
-            <li v-for="entry in listing.entries" :key="entry.name">
+            <li v-for="entry in visibleEntries" :key="entry.name" class="file-row">
             <button
               type="button"
               :data-entry="entry.name"

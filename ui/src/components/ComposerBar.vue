@@ -1,7 +1,7 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { cancelTurn, selectModel, selectPermission, sendPrompt, stageImage, state } from '../lib/store.js'
-import { mobile, reportComposerOverflow } from '../lib/layout.js'
+import { cancelTurn, releaseImagePreview, selectModel, selectPermission, sendPrompt, stageImage, state } from '../lib/store.js'
+import { compact, reportComposerOverflow } from '../lib/layout.js'
 import { modelIcon, modelMark } from '../lib/model-icons.js'
 import ModelBrowser from './ModelBrowser.vue'
 import ComboBox from './ComboBox.vue'
@@ -13,6 +13,8 @@ import AppIcon from './AppIcon.vue'
 const text = ref('')
 const attachments = ref([])
 const busy = ref(false)
+/** 正在处理（解码 → 降采样 → 上传）的图片数量；>0 时给出可见提示，收尾后必然归零。 */
+const staging = ref(0)
 const fileInput = ref(null)
 const area = ref(null)
 const settingsOpen = ref(false)
@@ -20,7 +22,8 @@ const infoOpen = ref(false)
 /** Data URL of the attachment being previewed full screen. */
 
 const running = computed(() => state.telemetry.running)
-const canSend = computed(() => !busy.value && state.selected !== undefined && (text.value.trim() !== '' || attachments.value.length > 0))
+// 图片还在解码/压缩/上传时不允许发送：否则会发出一条只有文字、图片被悄悄丢掉的消息。
+const canSend = computed(() => !busy.value && staging.value === 0 && state.selected !== undefined && (text.value.trim() !== '' || attachments.value.length > 0))
 
 /** Model options flattened from the provider groups, each tagged with its provider for grouping. */
 const modelItems = computed(() =>
@@ -82,11 +85,11 @@ async function send () {
   try {
     const content = []
     // Images first, then the text — the same order the Desktop composer submits.
+    // 图片只带 uploadId：字节在二进制上传时已经到宿主了，这里不再塞 base64，也不 stringify 整张图。
     for (const attachment of attachments.value) {
       content.push({
         type: 'image',
-        mediaType: attachment.mediaType,
-        data: attachment.data,
+        uploadId: attachment.uploadId,
         ...(attachment.name === undefined ? {} : { name: attachment.name }),
       })
     }
@@ -94,21 +97,43 @@ async function send () {
     if (trimmed !== '') content.push({ type: 'text', text: trimmed })
     await sendPrompt(content, 'queue')
     text.value = ''
-    attachments.value = []
+    clearAttachments()
     await autosize()
   } catch {
-    /* the store surfaces the error */
+    /* the store surfaces the error; 附件保留，读者可以改完再发一次 */
   } finally {
     busy.value = false
   }
 }
 
-/** Stage a picked image on the Host and show a chip until the message is sent. */
+/** 释放所有预览 URL；blob 不 revoke 就会一直占着内存。 */
+function clearAttachments () {
+  for (const attachment of attachments.value) releaseImagePreview(attachment)
+  attachments.value = []
+}
+
+/** 移除一张附件，并释放它的预览 URL。 */
+function removeAttachment (index) {
+  const target = attachments.value[index]
+  if (target !== undefined) releaseImagePreview(target)
+  attachments.value = attachments.value.filter((_, position) => position !== index)
+}
+
+/**
+ * 暂存一张图片：字节直接上传（不经过 base64），预览用 object URL。
+ *
+ * `staging` 计数保证任何失败路径都会把提示收掉 —— 卡在「处理中」比报错更难受。
+ * @param file - 选中的或粘贴的图片。
+ */
 async function stage (file) {
+  staging.value += 1
   try {
-    attachments.value = [...attachments.value, await stageImage(file)]
+    const attachment = await stageImage(file)
+    attachments.value = [...attachments.value, attachment]
   } catch (error) {
-    state.actionError = String(error.message ?? error)
+    state.actionError = String(error?.message ?? error)
+  } finally {
+    staging.value -= 1
   }
 }
 
@@ -120,8 +145,14 @@ async function pick (event) {
   }
 }
 
-/** Paste an image from the clipboard as an attachment. */
+/**
+ * Paste an image from the clipboard as an attachment.
+ *
+ * 只处理「还没人处理过」的粘贴：编辑器自己也会接 paste（MarkdownComposer 的 domEventHandlers），
+ * 它处理过就会 preventDefault；这里再处理一遍会把同一张图 stage 两次（两次 base64/上传、两个附件）。
+ */
 async function onPaste (event) {
+  if (event.defaultPrevented) return
   const items = [...(event.clipboardData?.items ?? [])]
   const images = items.filter((item) => item.type.startsWith('image/')).map((item) => item.getAsFile()).filter(Boolean)
   if (images.length === 0) return
@@ -164,6 +195,11 @@ const sendRef = ref(null)
 /** Learned natural width of the desktop row; only ever grows, so the decision cannot oscillate. */
 const neededWidth = ref(0)
 let observer
+/** 上一次真正提交给 layout 的结论：迟滞的参照系（中间带维持现状）。 */
+let reportedOverflow = false
+/** 待提交的结论与它的稳定计时器。 */
+let overflowTimer
+let pendingOverflow
 
 /** @returns the DOM node behind a template ref, which may be a child component instance. */
 function nodeOf (reference) {
@@ -174,11 +210,31 @@ function nodeOf (reference) {
 }
 
 /**
+ * 结论必须稳定 250ms 才提交。
+ *
+ * ResizeObserver 在一次重排里可能连发好几拍（滚动条出现、字体加载、宽度过渡的每一帧）。不加这道闸，
+ * 打开右栏的那一瞬间就会先判「放不下」再判「放得下」；而 `compact` 一旦回写布局（旧实现里它直接进
+ * `mobile`），布局变化又会引起下一次测量 —— 那个自激回路就是这样转起来的。250ms 足够滤掉过渡帧。
+ * @param value - 本次测出来的结论。
+ */
+function scheduleOverflow (value) {
+  if (value === pendingOverflow) return
+  pendingOverflow = value
+  if (overflowTimer !== undefined) clearTimeout(overflowTimer)
+  overflowTimer = setTimeout(() => {
+    overflowTimer = undefined
+    if (pendingOverflow === reportedOverflow) return
+    reportedOverflow = pendingOverflow
+    reportComposerOverflow(reportedOverflow)
+  }, 250)
+}
+
+/**
  * Compare the row's width with what the desktop controls actually need.
  *
  * `scrollWidth` is used next to `offsetWidth` because the telemetry strip is the control that gets
  * squeezed: its own box shrinks while its content keeps its full width, which is exactly the signal
- * that the desktop row no longer fits.
+ * that the desktop row no longer fits. 判定带迟滞：明确不够才收、明确富余才放，中间带不动。
  */
 function measure () {
   const row = toolbar.value
@@ -191,8 +247,8 @@ function measure () {
   }
   if (neededWidth.value === 0) return
   const available = row.clientWidth
-  if (available < neededWidth.value) reportComposerOverflow(true)
-  else if (available > neededWidth.value * 1.06) reportComposerOverflow(false)
+  if (available < neededWidth.value) scheduleOverflow(true)
+  else if (available > neededWidth.value * 1.06) scheduleOverflow(false)
 }
 
 onMounted(() => {
@@ -204,9 +260,17 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  if (overflowTimer !== undefined) {
+    clearTimeout(overflowTimer)
+    overflowTimer = undefined
+  }
+  // 卸载时把还在预览的 blob 释放掉：草稿没了，object URL 不该继续占内存。
+  clearAttachments()
 })
 
-watch([() => attachments.value.length, () => state.selected, running, mobile], () => {
+// 注意：这里**不能**再依赖 `mobile`。旧实现 `watch(..., mobile, () => nextTick(measure))` 把
+// 「布局变化 → 重新测量」这条回路显式闭合了，正是自激的关键一环；现在只跟着内容变化重测。
+watch([() => attachments.value.length, () => state.selected, running], () => {
   void nextTick(measure)
 })
 
@@ -214,7 +278,7 @@ watch([() => attachments.value.length, () => state.selected, running, mobile], (
    line would be clipped and the field would look scrollable on a phone. */
 const placeholder = computed(() => {
   if (state.selected === undefined) return '先选择一个会话'
-  return mobile.value ? '发消息…' : '发消息…（Enter 换行 / Ctrl+Enter 发送，可直接粘贴图片）'
+  return compact.value ? '发消息…' : '发消息…（Enter 换行 / Ctrl+Enter 发送，可直接粘贴图片）'
 })
 /** Whether the full catalogue browser is open. */
 const browserOpen = ref(false)
@@ -241,26 +305,31 @@ function chooseFromBrowser (modelId) {
          Paste is handled on the card so an image can be dropped anywhere in the composer. -->
     <div class="glass rounded-[18px]" @paste="onPaste">
       <div
-        v-if="attachments.length > 0"
-        class="flex gap-2 overflow-x-auto border-b border-white/50 px-3 py-2 dark:border-white/10"
+        v-if="attachments.length > 0 || staging > 0"
+        class="flex items-center gap-2 overflow-x-auto border-b border-white/50 px-3 py-2 dark:border-white/10"
       >
         <div
           v-for="(attachment, index) in attachments"
-          :key="index"
+          :key="attachment.uploadId"
           class="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/60 dark:border-white/10"
         >
+          <!-- 预览是 blob: URL（零拷贝），不再把整张图的 base64 塞进 <img src>。 -->
           <button type="button" class="h-full w-full" title="预览" data-zoom="1">
-            <img :src="attachment.preview" :alt="attachment.name" class="h-full w-full object-cover" />
+            <img :src="attachment.previewUrl" :alt="attachment.name" decoding="async" class="h-full w-full object-cover" />
           </button>
           <button
             type="button"
             class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
             title="移除"
-            @click="attachments = attachments.filter((_, position) => position !== index)"
+            @click="removeAttachment(index)"
           >
             <AppIcon name="close" :size="11" />
           </button>
         </div>
+        <!-- 处理中就说出来：解码/压缩/上传期间不显示任何提示，读者会以为卡死了。 -->
+        <span v-if="staging > 0" class="shrink-0 px-1 text-[11px] text-zinc-400">
+          正在处理图片…
+        </span>
       </div>
 
       <MarkdownComposer
@@ -277,12 +346,12 @@ function chooseFromBrowser (modelId) {
           <AppIcon name="paperclip" :size="16" />
         </button>
         <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="pick" />
-        <StatusStrip v-if="!mobile && state.selected !== undefined" ref="stripRef" class="min-w-0 shrink" />
+        <StatusStrip v-if="!compact && state.selected !== undefined" ref="stripRef" class="min-w-0 shrink" />
 
         <!-- Right cluster: the full controls while they fit, icons once they do not. -->
         <div class="ml-auto flex shrink-0 items-center gap-1.5">
           <ComboBox
-            v-if="!mobile"
+            v-if="!compact"
             ref="modelRef"
             class="shrink-0"
             :model-value="currentModel"
@@ -301,7 +370,7 @@ function chooseFromBrowser (modelId) {
             @update:model-value="chooseModel"
           />
           <ComboBox
-            v-if="!mobile"
+            v-if="!compact"
             ref="permissionRef"
             class="shrink-0"
             :model-value="state.permissions.current ?? ''"
@@ -315,7 +384,7 @@ function chooseFromBrowser (modelId) {
             @update:model-value="choosePermission"
           />
           <button
-            v-if="mobile"
+            v-if="compact"
             class="icon-btn"
             type="button"
             title="查看状态详情"
@@ -324,7 +393,7 @@ function chooseFromBrowser (modelId) {
             <AppIcon name="info" :size="16" />
           </button>
           <button
-            v-if="mobile"
+            v-if="compact"
             class="icon-btn"
             type="button"
             title="模型与权限"

@@ -161,6 +161,17 @@ body {
       backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
       dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
   }
+  /*
+   * 右栏专用：**不带 backdrop-filter** 的实色面板。
+   *
+   * 为什么单开一个类：右栏是覆盖层，打开时它底下就是整段对话；毛玻璃要在每次出现、每次尺寸变化时
+   * 对它背后那一整块背景重新采样（合成/光栅化重活），而读者对这个面板的需求只是「看得清内容」。
+   * 90% 实色底 + 同样的圆角/描边，观感几乎一致，却没有那一次全区域模糊采样。
+   */
+  .panel-solid {
+    @apply rounded-[18px] border border-white/60 bg-white/90 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
+      dark:border-white/10 dark:bg-zinc-900/90 dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+  }
   .brand-tile {
     @apply inline-block shrink-0 overflow-hidden rounded-[10px] ring-1 ring-white/60 dark:ring-white/10;
   }
@@ -474,9 +485,35 @@ body {
   .transcript .card,
   .transcript .prompt-glass,
   .transcript .glass,
-  .transcript .glass-soft {
+  .transcript .glass-soft,
+  /* 代码块是转录里出现次数最多的一类模糊元素（长会话里几十上百个），一起免掉。 */
+  .transcript .md pre {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
+  }
+
+  /*
+   * 右栏打开时暂停背景漂移动画。
+   *
+   * 背景是几团大面积模糊光斑在缓慢位移，每帧都要重新合成；右栏作为覆盖层出现时与它同帧竞争合成资源，
+   * 是「一打开就卡」的观感来源之一。打开期间冻结，关掉后继续 —— 静态画面几乎看不出区别。
+   */
+  .files-open .drift-a,
+  .files-open .drift-b,
+  .files-open .drift-c,
+  .files-open .drift-hue {
+    animation-play-state: paused !important;
+  }
+
+  /*
+   * 文件列表：屏幕外的行不参与布局与绘制。
+   *
+   * 500 行的目录只有一屏可见；`content-visibility: auto` 让浏览器跳过屏外行的布局/绘制，
+   * `contain-intrinsic-size` 给出估算行高（行高 + 间距约 30px），滚动条长度与定位才不会跳。
+   */
+  .file-pane .file-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 30px;
   }
 
   /* -------------------------------------------------------------- transcript rows */
@@ -649,8 +686,9 @@ body {
       focus:border-blue-400/80 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-100;
   }
   .icon-btn {
+    /* 小元素不值得一次模糊采样：20px 的按钮背后几乎只有底色，去掉 backdrop-blur 观感不变。 */
     @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/60 bg-white/50
-      text-zinc-600 backdrop-blur-xl transition-all duration-200 hover:-translate-y-px hover:bg-white/80
+      text-zinc-600 transition-all duration-200 hover:-translate-y-px hover:bg-white/80
       active:translate-y-0 disabled:opacity-40 disabled:hover:bg-white/50 dark:border-white/10
       dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.12];
   }
@@ -773,7 +811,8 @@ body {
     @apply rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 font-mono text-[13px] dark:bg-white/10;
   }
   .md pre {
-    @apply overflow-x-auto rounded-xl border border-white/60 bg-white/50 p-3 backdrop-blur-xl
+    /* 代码块不带毛玻璃：长会话里它是数量最多的一类元素，模糊只让它们在滚动时反复重采样。 */
+    @apply overflow-x-auto rounded-xl border border-white/60 bg-white/50 p-3
       dark:border-white/10 dark:bg-black/30;
   }
   .md pre code {
@@ -883,3 +922,123 @@ body {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+
+/* Brand tile hover ring.
+
+   The tile has no frame at rest — the artwork provides its own edge. On hover a highlight travels around
+   the frame, keeping the tile's own radius and 2px thickness.
+
+   How: the ::before is masked down to a ring, and only the conic gradient's *start angle* is animated —
+   via a registered custom property, which is what makes an angle animatable at all. Rotating the element
+   itself would spin the square into a diamond and move the frame, which is not the effect wanted. */
+@property --brand-ring-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.brand-tile {
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  position: relative;
+  isolation: isolate;
+}
+
+.brand-tile::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--brand-ring-angle),
+    transparent 0deg 300deg,
+    #38bdf8 330deg,
+    #a78bfa 350deg,
+    transparent 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.brand-tile:hover::before,
+.brand-tile:focus-visible::before {
+  opacity: 1;
+  animation: brand-ring-sweep 1.3s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-tile:hover::before,
+  .brand-tile:focus-visible::before {
+    animation: none;
+  }
+}
+
+@keyframes brand-ring-sweep {
+  /* One revolution, one sharp surge.
+
+     Speed is v(t) = 0.15 + 0.85 * ((1 - cos 2πt) / 2)^4: the fourth power keeps the ring slow for most of
+     the lap and spends it in a short, violent burst at the halfway point, which is the acceleration shape
+     the Windows ring has. Peak angular speed lands near 720 deg/s, roughly three times the previous curve,
+     while the slowest moment is still 15% of peak — so the brake slows down hard without ever stopping.
+
+     Integrated into angle-over-time and sampled at 48 points, all linear: no segment boundaries, so no
+     hitches. Both ends share the same speed and 100% is explicit, so the loop closes seamlessly. */
+  0% { --brand-ring-angle: 0.00deg; }
+  2.0833% { --brand-ring-angle: 2.93deg; }
+  4.1667% { --brand-ring-angle: 5.90deg; }
+  6.25% { --brand-ring-angle: 8.83deg; }
+  8.3333% { --brand-ring-angle: 11.76deg; }
+  10.4167% { --brand-ring-angle: 14.72deg; }
+  12.5% { --brand-ring-angle: 17.66deg; }
+  14.5833% { --brand-ring-angle: 20.60deg; }
+  16.6667% { --brand-ring-angle: 23.61deg; }
+  18.75% { --brand-ring-angle: 26.64deg; }
+  20.8333% { --brand-ring-angle: 29.79deg; }
+  22.9167% { --brand-ring-angle: 33.21deg; }
+  25% { --brand-ring-angle: 36.94deg; }
+  27.0833% { --brand-ring-angle: 41.21deg; }
+  29.1667% { --brand-ring-angle: 46.33deg; }
+  31.25% { --brand-ring-angle: 52.44deg; }
+  33.3333% { --brand-ring-angle: 59.87deg; }
+  35.4167% { --brand-ring-angle: 68.99deg; }
+  37.5% { --brand-ring-angle: 79.80deg; }
+  39.5833% { --brand-ring-angle: 92.50deg; }
+  41.6667% { --brand-ring-angle: 107.27deg; }
+  43.75% { --brand-ring-angle: 123.63deg; }
+  45.8333% { --brand-ring-angle: 141.45deg; }
+  47.9167% { --brand-ring-angle: 160.56deg; }
+  50% { --brand-ring-angle: 180.00deg; }
+  52.0833% { --brand-ring-angle: 199.44deg; }
+  54.1667% { --brand-ring-angle: 218.55deg; }
+  56.25% { --brand-ring-angle: 236.37deg; }
+  58.3333% { --brand-ring-angle: 252.73deg; }
+  60.4167% { --brand-ring-angle: 267.50deg; }
+  62.5% { --brand-ring-angle: 280.20deg; }
+  64.5833% { --brand-ring-angle: 291.01deg; }
+  66.6667% { --brand-ring-angle: 300.13deg; }
+  68.75% { --brand-ring-angle: 307.56deg; }
+  70.8333% { --brand-ring-angle: 313.67deg; }
+  72.9167% { --brand-ring-angle: 318.79deg; }
+  75% { --brand-ring-angle: 323.06deg; }
+  77.0833% { --brand-ring-angle: 326.79deg; }
+  79.1667% { --brand-ring-angle: 330.21deg; }
+  81.25% { --brand-ring-angle: 333.36deg; }
+  83.3333% { --brand-ring-angle: 336.39deg; }
+  85.4167% { --brand-ring-angle: 339.40deg; }
+  87.5% { --brand-ring-angle: 342.34deg; }
+  89.5833% { --brand-ring-angle: 345.28deg; }
+  91.6667% { --brand-ring-angle: 348.24deg; }
+  93.75% { --brand-ring-angle: 351.17deg; }
+  95.8333% { --brand-ring-angle: 354.10deg; }
+  97.9167% { --brand-ring-angle: 357.07deg; }
+  100% { --brand-ring-angle: 360.00deg; }
+}
+

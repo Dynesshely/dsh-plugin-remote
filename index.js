@@ -215,6 +215,79 @@ function presentedSecret (request) {
   return undefined
 }
 
+/**
+ * @param request - the request.
+ * @param limit - 允许的最大字节数。
+ * @returns 原始请求体字节；超过上限抛 `body too large`。
+ *
+ * 二进制上传（图片）不能走 `readJson`：那条路要先 `Buffer.concat` 再 `toString('utf8')` 再
+ * `JSON.parse`，对一张 10MB 的图片等于多复制两份、再把 base64 解一遍。这里原样收字节。
+ */
+async function readBuffer (request, limit) {
+  const declared = Number(request.headers['content-length'] ?? Number.NaN)
+  if (Number.isFinite(declared) && declared > limit) throw new Error('body too large')
+  const chunks = []
+  let total = 0
+  for await (const chunk of request) {
+    total += chunk.length
+    if (total > limit) throw new Error('body too large')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+/**
+ * 刚上传、还没被发送引用的图片字节。
+ *
+ * 页面改成二进制直传之后，发送时不该再把整张图塞回 JSON：`/api/send` 只带一个短 `uploadId`，
+ * 由宿主在这里找到字节、转成 harness 认识的内联 `data`（base64 在服务端做，页面主线程不再参与）。
+ * 条目有 TTL 与总量双上限：草稿放久了会失效，但宿主内存不会无界增长；发送成功后立刻删除。
+ */
+const stagedImages = new Map()
+const STAGED_IMAGE_TTL_MS = 10 * 60 * 1000
+const STAGED_IMAGE_MAX_BYTES = 64 * 1024 * 1024
+let stagedImageBytes = 0
+
+/** 回收过期条目：每次上传前调用，只做过期这一件事。 */
+function pruneStagedImages () {
+  const now = Date.now()
+  for (const [uploadId, entry] of stagedImages) {
+    if (now - entry.at <= STAGED_IMAGE_TTL_MS) continue
+    stagedImageBytes -= entry.bytes.byteLength
+    stagedImages.delete(uploadId)
+  }
+}
+
+/**
+ * @param bytes - 图片字节。
+ * @param mediaType - 它的媒体类型。
+ * @param name - 原始文件名（可选）。
+ * @returns 可写进 `/api/send` 的短引用 `uploadId`。
+ */
+function stageImageBytes (bytes, mediaType, name) {
+  pruneStagedImages()
+  const uploadId = randomUUID()
+  stagedImages.set(uploadId, { bytes, mediaType, name, at: Date.now() })
+  stagedImageBytes += bytes.byteLength
+  // 总量超限就丢最旧的：宁可让一个很久没发的草稿失效，也不让宿主内存无界增长。
+  for (const [key, entry] of stagedImages) {
+    if (stagedImageBytes <= STAGED_IMAGE_MAX_BYTES) break
+    stagedImageBytes -= entry.bytes.byteLength
+    stagedImages.delete(key)
+  }
+  return uploadId
+}
+
+/** @param uploadIds - 已经成功发送的引用，发送完就把字节丢掉。 */
+function releaseStagedImages (uploadIds) {
+  for (const uploadId of uploadIds) {
+    const entry = stagedImages.get(uploadId)
+    if (entry === undefined) continue
+    stagedImageBytes -= entry.bytes.byteLength
+    stagedImages.delete(uploadId)
+  }
+}
+
 /** @returns the request body parsed as JSON, or throws a tagged error. */
 async function readJson (request, limit = MAX_BODY) {
   const chunks = []
@@ -310,6 +383,17 @@ function sendJson (response, status, body, headers = {}) {
     })
     response.end(compressed)
   })
+}
+
+/**
+ * @param value - a path from Session text.
+ * @returns the path with a missing separator restored in front of a dot-directory.
+ */
+function repairDotSeparators (value) {
+  return String(value).replace(
+    /([^\\/])\.(meta|git|github|venv|next|turbo|cache)(?=[\\/]|$)/giu,
+    (_match, before, name) => before + '\\' + '.' + name,
+  )
 }
 
 /** @returns the Session catalog shaped for the page. */
@@ -727,16 +811,33 @@ async function liveSessionOf (ctx, sessionId) {
  * Image bytes travel inside the prompt (`{type:'image', mediaType, data, name?}`), which is exactly
  * what the Desktop composer submits: the Host admits and stores them with the submission. The
  * legacy page sends `text`, which stays supported.
+ *
+ * 页面现在走二进制直传：`{type:'image', uploadId}` 会在这里取回暂存字节并就地转成上面那种内联
+ * 形式（base64 在服务端算），调用方在发送成功后用 `usedUploadIds` 把字节释放掉。
  * @param body - the parsed request body.
+ * @param usedUploadIds - 可选；收集本次真正用到的 `uploadId`，发送成功后释放。
  * @returns the accepted content parts.
  */
-function promptContentOf (body) {
+function promptContentOf (body, usedUploadIds) {
   const parts = []
   if (Array.isArray(body?.content)) {
     for (const part of body.content) {
       if (part === null || typeof part !== 'object') continue
       if (part.type === 'text' && typeof part.text === 'string' && part.text.trim() !== '') {
         parts.push({ type: 'text', text: part.text.trim() })
+        continue
+      }
+      if (part.type === 'image' && typeof part.uploadId === 'string') {
+        const staged = stagedImages.get(part.uploadId)
+        // 过期或未知的引用：跳过这一张，不让整条消息失败 —— 读者还能重新粘贴。
+        if (staged === undefined) continue
+        if (usedUploadIds !== undefined) usedUploadIds.push(part.uploadId)
+        parts.push({
+          type: 'image',
+          mediaType: staged.mediaType,
+          data: staged.bytes.toString('base64'),
+          ...(typeof staged.name === 'string' && staged.name !== '' ? { name: staged.name } : {}),
+        })
         continue
       }
       if (part.type === 'image' && typeof part.data === 'string' && typeof part.mediaType === 'string') {
@@ -1255,6 +1356,12 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       const candidates = []
       if (explicit !== '') {
         candidates.push(explicit)
+        // Markdown escaping eats the separator in front of a dot-directory: a real path like
+        // D:\Projects\.meta\shot.png arrives as D:\Projects.meta\shot.png. Those messages are already in
+        // logs, so the second candidate puts the separator back — and it is only used if the file exists,
+        // which keeps this a repair rather than a guess.
+        const repaired = repairDotSeparators(explicit)
+        if (repaired !== explicit) candidates.push(repaired)
       } else {
         try {
           const pathname = decodeURIComponent(new URL(url.searchParams.get('url') ?? '').pathname)
@@ -1460,6 +1567,40 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/attachment') {
+      // 二进制上传：body 就是图片字节。旧页面仍可用 data URL 走 /api/attach（保留不动，向后兼容）。
+      const header = String(request.headers['content-type'] ?? '')
+      const mediaType = String(url.searchParams.get('mediaType') ?? header.split(';')[0] ?? '').trim().toLowerCase()
+      if (!IMAGE_TYPES.has(mediaType)) {
+        json(415, { error: 'unsupported image payload' })
+        return
+      }
+      const rawName = url.searchParams.get('name') ?? ''
+      const name = rawName === '' ? undefined : rawName.slice(0, 200)
+      let bytes
+      try {
+        bytes = await readBuffer(request, MAX_UPLOAD_BODY)
+      } catch (error) {
+        if (String(error?.message) === 'body too large') json(413, { error: '图片太大（上限 16 MB），请压缩后再试' })
+        else json(400, { error: 'bad request' })
+        return
+      }
+      if (bytes.byteLength === 0) {
+        json(400, { error: 'empty image payload' })
+        return
+      }
+      // 只暂存、不落盘：发送时由 promptContentOf 取回并转成内联 data，harness 在收下消息时自己存。
+      const uploadId = stageImageBytes(bytes, mediaType, name)
+      json(200, {
+        ok: true,
+        uploadId,
+        mediaType,
+        size: bytes.byteLength,
+        ...(name === undefined ? {} : { name }),
+      })
+      return
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/attachment') {
       // Image bytes for the transcript and the composer preview: the page cannot reach the
       // attachment store itself, so the Host reads the one attachment a Session log proves.
@@ -1590,7 +1731,9 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
         return
       }
       const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
-      const content = promptContentOf(body)
+      /** 本次真正用到的上传引用；发送成功后释放这些字节。 */
+      const usedUploadIds = []
+      const content = promptContentOf(body, usedUploadIds)
       if (sessionId === '' || content.length === 0) {
         json(400, { error: 'sessionId and some content are required' })
         return
@@ -1602,6 +1745,8 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           mode: body.mode === 'steer' ? 'steer' : 'queue',
           content,
         }, new AbortController().signal)
+        // 消息已经被 harness 收下（图片也随之入库），暂存的那份字节到这里就没用了。
+        releaseStagedImages(usedUploadIds)
         json(200, { ok: value?.accepted === true })
       } catch (error) {
         json(500, { error: String(error?.message ?? error) })
