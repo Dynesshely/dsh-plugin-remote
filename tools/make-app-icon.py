@@ -22,20 +22,22 @@ PUBLIC = ROOT / "ui" / "public"
 META = Path(__file__).resolve().parents[3] / ".meta" / "Dynesshely" / "dsh-plugin-remote"
 SOURCE = META / "whale_iridescent_metal.png"
 
-# The mark keeps this share of the canvas; the rest is margin on every side.
-CONTENT_RATIO = 0.84
+# Share of the canvas the mark fills, per output. A tab icon renders at 16-32px, where the margin of the
+# larger sizes leaves the whale too small to read, so the favicons fill far more of the square.
+APP_ICON_RATIO = 0.84
+FAVICON_RATIO = 0.98
 
 OUTPUTS = {
-    "app-icon.png": 128,
-    "favicon-64.png": 64,
-    "favicon-32.png": 32,
-    "apple-touch-icon.png": 180,
+    "app-icon.png": (128, APP_ICON_RATIO),
+    "favicon-64.png": (64, FAVICON_RATIO),
+    "favicon-32.png": (32, FAVICON_RATIO),
+    "apple-touch-icon.png": (180, APP_ICON_RATIO),
 }
 
 
-def centred(mark: Image.Image, size: int) -> Image.Image:
+def centred(mark: Image.Image, size: int, ratio: float) -> Image.Image:
     """@returns the mark scaled to fit the safe area and centred on a transparent square."""
-    margin = round(size * (1 - CONTENT_RATIO) / 2)
+    margin = round(size * (1 - ratio) / 2)
     inner = max(1, size - margin * 2)
     box_width, box_height = mark.size
     scale = min(inner / box_width, inner / box_height)
@@ -59,12 +61,12 @@ def main() -> None:
     # A preview on both backgrounds, so the finish can be judged against light and dark shells.
     for background, label in (((22, 22, 26), "dark"), ((244, 244, 245), "light")):
         preview = Image.new("RGBA", (320, 320), (*background, 255))
-        icon = centred(trimmed, 256)
+        icon = centred(trimmed, 256, APP_ICON_RATIO)
         preview.paste(icon, (32, 32), icon)
         preview.save(META / f"icon-preview-{label}.png")
 
-    for name, size in OUTPUTS.items():
-        icon = centred(trimmed, size)
+    for name, (size, ratio) in OUTPUTS.items():
+        icon = centred(trimmed, size, ratio)
         icon.save(PUBLIC / name, optimize=True)
         print(f"  wrote {name} ({size}x{size}, {icon.getbbox()})")
 
