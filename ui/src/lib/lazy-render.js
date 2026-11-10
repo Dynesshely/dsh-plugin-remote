@@ -40,6 +40,8 @@ let near
 let far
 /** The element the rows scroll inside, published by the pane that owns them. */
 let scrollRoot
+/** true 表示程序化滚动进行中：补偿让路（见 `setProgrammaticScroll`）。 */
+let programmatic = false
 /** Serialises height-changing batches, so two of them cannot measure the same layout. */
 let chain = Promise.resolve()
 
@@ -51,6 +53,32 @@ let chain = Promise.resolve()
  */
 export function setScrollRoot (element) {
   scrollRoot = element ?? undefined
+}
+
+/**
+ * 程序化滚动（timeline 跳转）期间暂停"保持读者位置"的补偿。
+ *
+ * 跳转动画本身在改 `scrollTop`，此时再按"行在上方变高"去补一次，会把动画打断/拉回去；
+ * 跳转结束后由调用方按实际位置收尾（并做最多两轮短校正）。
+ * @param value - true 表示暂停补偿。
+ */
+export function setProgrammaticScroll (value) {
+  programmatic = value === true
+}
+
+/**
+ * 立刻渲染某一行（跳转前预热目标行）。
+ *
+ * 目标行可能还只是占位高度（lazy-render 的范围判定还没轮到它），先把它标成已渲染，`nextTick` 后
+ * 读到的高度才接近真实值，跳转不用先"跳一半"再靠校正找回。
+ * @param node - 行的根元素（`useLazyRender` 观察的那个）。
+ */
+export function renderRowNow (node) {
+  if (node === null || node === undefined) return
+  const entry = watched.get(node)
+  if (entry === undefined || entry.rendered.value === true) return
+  queue.delete(entry)
+  entry.rendered.value = true
 }
 
 /**
@@ -78,7 +106,8 @@ function toggle (entries, value) {
     for (const entry of entries) {
       if (entry.alive) entry.rendered.value = value
     }
-    if (box === undefined || !above) return
+    // 程序化滚动进行中：偏移由跳转控制器负责，这里只切渲染状态。
+    if (box === undefined || !above || programmatic === true) return
     await nextTick()
     // 读一次 scrollTop / scrollHeight：浏览器自己的滚动锚定若已生效，scrollTop 会先动，这时不再补偿。
     const anchored = box.scrollTop !== scrollBefore

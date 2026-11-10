@@ -13,7 +13,7 @@ import AppIcon from './AppIcon.vue'
 import { canCancel, canRetry, loadMessage, loadPhase, snapshotLine } from '../lib/loading.js'
 import { cancelOlder, retrySession, setLightweight } from '../lib/store.js'
 import GLightbox from 'glightbox'
-import { setScrollRoot } from '../lib/lazy-render.js'
+import { setScrollRoot, renderRowNow, setProgrammaticScroll as setLazyProgrammaticScroll } from '../lib/lazy-render.js'
 import 'glightbox/dist/css/glightbox.min.css'
 
 /**
@@ -171,6 +171,53 @@ function atBottom () {
   return node.scrollHeight - node.scrollTop - node.clientHeight <= STICKY_GAP
 }
 
+/* ---------------------------------------------------------------- 程序化滚动（timeline 跳转） */
+
+/**
+ * 跳转动画进行中。
+ *
+ * 动画期间 `scrollTop` 由跳转控制器独占：贴底跟随、前插补偿、发送后贴底、lazy-render 的位置补偿
+ * 全部让路 —— 否则它们会在动画中途改写 `scrollTop`，表现就是"只滚一小段就停住"，得连点好几次
+ * 才能到目标。定时器只是兜底（3s），正常情况下由 `finishProgrammaticScroll()` 在全部校正结束后解除。
+ */
+const programmaticScroll = ref(false)
+/** 兜底时长：超过它一定解除压制。取 3s，确保长距离 smooth + 两轮校正都跑完之前不会提前解锁。 */
+const PROGRAMMATIC_TIMEOUT_MS = 3000
+let programmaticTimer
+
+/** 是否偏好减少动效（reduce 时跳转用 instant，不做平滑动画）。 */
+const reducedMotion = ref(false)
+let motionQuery
+
+/**
+ * @param event - matchMedia 的 change 事件。
+ */
+function onMotionPreferenceChange (event) {
+  reducedMotion.value = event.matches === true
+}
+
+/** 进入程序化滚动：所有自动跟随/补偿让路。 */
+function beginProgrammaticScroll () {
+  programmaticScroll.value = true
+  setLazyProgrammaticScroll(true)
+  if (programmaticTimer !== undefined) window.clearTimeout(programmaticTimer)
+  programmaticTimer = window.setTimeout(() => {
+    programmaticTimer = undefined
+    finishProgrammaticScroll()
+  }, PROGRAMMATIC_TIMEOUT_MS)
+}
+
+/** 结束程序化滚动：按实际位置恢复 sticky（在底部才继续跟随）。 */
+function finishProgrammaticScroll () {
+  programmaticScroll.value = false
+  setLazyProgrammaticScroll(false)
+  if (programmaticTimer !== undefined) {
+    window.clearTimeout(programmaticTimer)
+    programmaticTimer = undefined
+  }
+  sticky.value = atBottom()
+}
+
 const showLiveReasoning = ref(false)
 /** Index of the prompt currently being read, for the rail's active tick. */
 const activePrompt = ref(-1)
@@ -240,15 +287,109 @@ function syncActivePrompt () {
   activePrompt.value = activeTick(tops, node.scrollTop, 80, bottomGap)
 }
 
-/** Scroll one prompt to the top of the transcript. */
-function jumpToPrompt (key) {
+/** 跳转允许的最大校正轮数（首轮滚动 + 最多两轮校正）。 */
+const JUMP_MAX_CORRECTIONS = 2
+/** 落点容差：偏差不超过它就算到了。 */
+const JUMP_TOLERANCE = 2
+/** 短距离校正的阈值：偏差不超过它时**只用 instant**（smooth 在极短距离上是"加速-减速"，就是末尾那一下抖）。 */
+const JUMP_INSTANT_RANGE = 16
+
+/**
+ * 等一次滚动动画停下来。
+ *
+ * 支持 `scrollend` 的浏览器只认它（那是动画真正结束的时刻）；不支持时退化为「连续 3 帧 scrollTop
+ * 不变」。两种情况都有 1200ms 超时兜底。只在一次跳转里用，不是逐帧测量循环。
+ * @param node - 滚动容器。
+ */
+function waitForScrollEnd (node) {
+  return new Promise((resolve) => {
+    let settled = false
+    let frame
+    let still = 0
+    let last = node.scrollTop
+    /** 收尾：只结算一次。 */
+    const done = () => {
+      if (settled) return
+      settled = true
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      node.removeEventListener('scrollend', done)
+      window.clearTimeout(timer)
+      resolve()
+    }
+    const timer = window.setTimeout(done, 1200)
+    node.addEventListener('scrollend', done, { once: true })
+    // 有 scrollend 就不做静止推断：推断会在动画尾段（每帧 <0.5px）提前判定"结束了"，
+    // 随后的 instant 校正和仍在跑的动画叠在一起，正是末尾抖动的来源之一。
+    if ('onscrollend' in node) return
+    const tick = () => {
+      const top = node.scrollTop
+      if (Math.abs(top - last) < 0.5) still += 1
+      else {
+        still = 0
+        last = top
+      }
+      if (still >= 3) {
+        done()
+        return
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+  })
+}
+
+/** 等两帧：instant 位移后让 lazy-render 的挂载/高度变化落定，再读下一次偏差。 */
+async function settleFrames () {
+  await nextTick()
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+}
+
+/**
+ * 滚动到某条 prompt：一次点击、一段动画内精确抵达，末尾不抖。
+ *
+ * 策略（针对"最后阶段抖动"）：
+ * 1. 预热目标行（lazy-render 可能还没渲染它，占位高度会让首次偏移读偏）；
+ * 2. **整个跳转最多 1 次 smooth**：只有偏差 > 16px 才用 smooth，小距离一律 instant；
+ * 3. 校正：偏差 ≤ 2px 停止；2–16px 用 **instant** 一次补齐；> 16px 才允许再 smooth —— 但 smooth
+ *    已经被用过就退回 instant。这样绝不会出现"两段 smooth 衔接"的末尾晃动；
+ * 4. 全程维持 `programmaticScroll`（含所有校正），最后才解除；`finishProgrammaticScroll()` 不写
+ *    `scrollTop`，所以不会在末尾回弹。
+ * @param key - 目标 prompt 的行 key。
+ */
+async function jumpToPrompt (key) {
   const node = scroller.value
-  const target = itemElement(key)
-  if (node === null || target === null) return
-  sticky.value = false
-  const top = target.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop - 12
-  node.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' })
-  activePrompt.value = prompts.value.findIndex((tick) => tick.key === key)
+  if (node === null) return
+  const smoothAllowed = reducedMotion.value !== true
+  // 目标行还没渲染时先把它标成已渲染，再读偏移；否则滚到的是占位高度。
+  renderRowNow(itemElement(key)?.firstElementChild ?? null)
+  await nextTick()
+  if (scroller.value !== node) return
+  beginProgrammaticScroll()
+  try {
+    activePrompt.value = prompts.value.findIndex((tick) => tick.key === key)
+    let smoothUsed = false
+    for (let round = 0; round <= JUMP_MAX_CORRECTIONS; round += 1) {
+      const target = itemElement(key)
+      if (target === null) break
+      const top = Math.max(0, target.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop - 12)
+      const distance = Math.abs(node.scrollTop - top)
+      // 首轮一定要动；之后偏差在容差内就收手，不再做无意义的微调。
+      if (round > 0 && distance <= JUMP_TOLERANCE) break
+      const useSmooth = smoothAllowed && smoothUsed !== true && distance > JUMP_INSTANT_RANGE
+      if (useSmooth) {
+        smoothUsed = true
+        node.scrollTo({ top, behavior: 'smooth' })
+        await waitForScrollEnd(node)
+      } else {
+        node.scrollTo({ top, behavior: 'instant' })
+        await settleFrames()
+      }
+    }
+  } finally {
+    finishProgrammaticScroll()
+    syncActivePrompt()
+  }
 }
 
 /** Page one screen of older history in, keeping the reader's place (the content grows above them). */
@@ -265,6 +406,8 @@ async function loadEarlier () {
 /** Jump to the newest content only while the reader is already at the bottom. */
 function onScroll () {
   if (scroller.value === null) return
+  // 跳转动画期间不重算 sticky：中途的位置不代表读者的意图，结束时会按实际位置恢复。
+  if (programmaticScroll.value) return
   sticky.value = atBottom()
   schedulePromptSync()
 }
@@ -277,6 +420,8 @@ function onScroll () {
 function pinNow () {
   const node = scroller.value
   if (node === null) return
+  // 跳转进行中绝不抢滚动位置：即使是之前排进 nextTick 的贴底，也要让路给跳转控制器。
+  if (programmaticScroll.value) return
   node.scrollTop = node.scrollHeight
 }
 
@@ -297,6 +442,8 @@ function pinAfterRender () {
  * 两次读数之间不插 rAF / setTimeout，所以补偿与渲染发生在同一帧，浏览器不会画出中间态。
  */
 watch(() => state.snapshotPrepend, async () => {
+  // 跳转动画期间不补偿：`scrollTop` 归跳转控制器独占，这里再改一次就会把动画拉回去。
+  if (programmaticScroll.value) return
   const node = scroller.value
   if (node === null) return
   const heightBefore = node.scrollHeight
@@ -304,6 +451,7 @@ watch(() => state.snapshotPrepend, async () => {
   const wasAtBottom = atBottom()
   await nextTick()
   if (node.scrollHeight === heightBefore) return
+  if (programmaticScroll.value) return
   sticky.value = wasAtBottom
   node.scrollTop = wasAtBottom
     ? node.scrollHeight
@@ -324,7 +472,9 @@ watch([() => transcriptItems.value.length, () => state.selected], async () => {
  */
 async function scrollToBottomIfSticky () {
   if (!sticky.value) return
+  if (programmaticScroll.value) return
   await nextTick()
+  if (programmaticScroll.value) return
   pinNow()
 }
 
@@ -347,11 +497,14 @@ watch(() => state.selected, async () => {
  */
 watch(() => state.sessionLoading, (loading) => {
   if (loading === true) return
+  if (programmaticScroll.value) return
   if (sticky.value) pinAfterRender()
 })
 
 /** 发送 prompt 成功后立刻贴底：读者刚发出自己的消息，应当马上看到它（instant，一次 nextTick）。 */
 watch(() => state.promptSendCount, () => {
+  // 跳转动画期间不抢滚动位置：发送发生在动画中途时，等动画结束再按实际位置决定跟随。
+  if (programmaticScroll.value) return
   sticky.value = true
   pinAfterRender()
 })
@@ -508,9 +661,14 @@ const unbindLiveReasoning = bindStream(() => state.live.reasoning, liveReasoning
  * 一次性（promise 只 resolve 一次），并且仍在渲染之后执行，不会产生可见跳动；没有再用定时器。
  */
 onMounted(() => {
+  // 动效偏好只影响跳转方式（reduce 下 instant），不影响任何跟随逻辑。
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  reducedMotion.value = motionQuery.matches === true
+  motionQuery.addEventListener('change', onMotionPreferenceChange)
   const fonts = document.fonts
   if (fonts === undefined || typeof fonts.ready?.then !== 'function') return
   void fonts.ready.then(() => {
+    if (programmaticScroll.value) return
     if (sticky.value) pinAfterRender()
   })
 })
@@ -518,6 +676,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   unbindLive()
   unbindLiveReasoning()
+  // 卸载时把跳转状态收拾干净：定时器、lazy-render 的补偿开关都不能留给下一个人。
+  if (programmaticTimer !== undefined) {
+    window.clearTimeout(programmaticTimer)
+    programmaticTimer = undefined
+  }
+  motionQuery?.removeEventListener('change', onMotionPreferenceChange)
+  motionQuery = undefined
+  setLazyProgrammaticScroll(false)
 })
 </script>
 
