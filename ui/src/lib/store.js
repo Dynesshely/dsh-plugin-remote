@@ -561,6 +561,10 @@ function computeMessageParts (message) {
         attachmentId: String(attachment.attachmentId ?? ''),
         mediaType: String(attachment.mediaType ?? 'image/png'),
         name: attachment.name,
+        // 这几项只是给"回显刚发出的图片"做匹配用，不参与渲染。
+        bytes: Number.isFinite(Number(attachment.bytes)) ? Number(attachment.bytes) : undefined,
+        width: Number.isFinite(Number(attachment.width)) ? Number(attachment.width) : undefined,
+        height: Number.isFinite(Number(attachment.height)) ? Number(attachment.height) : undefined,
       })
       // No "🖼 图片" label: images render as thumbnails in the bubble itself.
     } else if (block.type === 'file') files.push(`📎 ${String(block.attachment?.name ?? '文件')}`)
@@ -574,20 +578,73 @@ function computeMessageParts (message) {
 const attachmentImages = reactive(new Map())
 /** Keys with a fetch in flight, so one image is requested once. */
 const attachmentPending = new Set()
+/** 拉取失败的 key：界面据此显示「图片不可用」，而不是永远停在「加载中」。 */
+const attachmentFailures = reactive(new Set())
+
+/**
+ * 本页刚上传（还没发送）的图片字节，键是宿主返回的 `uploadId`。
+ *
+ * 用途：宿主 `GET /api/attachment` 在部分 DSH 版本上读不到记录（返回 404，见
+ * `attachmentFailures` 的说明），而页面手里正好有刚发出的这份 blob —— 直接本地显示，
+ * 读者发完图片立刻就能看到，不必等一个注定失败的请求。
+ */
+const stagedImageBlobs = new Map()
+/** 本页刚发出去的图片（丢弃用来显示的 object URL 之外不占空间）。 */
+const recentSentImages = []
+/** 只留最近几张：多发的图片没有必要一直占着 blob。 */
+const MAX_RECENT_SENT_IMAGES = 8
+
+/** 记住一张刚发出的图片，供它对应的附件事件回显。 */
+function rememberSentImage (staged) {
+  const url = URL.createObjectURL(staged.blob)
+  recentSentImages.push({
+    mediaType: staged.mediaType,
+    name: staged.name,
+    size: staged.size,
+    url,
+  })
+  while (recentSentImages.length > MAX_RECENT_SENT_IMAGES) {
+    const evicted = recentSentImages.shift()
+    if (typeof evicted?.url === 'string') URL.revokeObjectURL(evicted.url)
+  }
+}
+
+/**
+ * @param meta - 事件里那颗 image block 的附件信息（`mediaType`/`bytes`/`name`）。
+ * @returns 本页刚发出的、能对上的那张图片；对上就把它从队列里取走（一次事件只消费一张）。
+ */
+function takeSentImage (meta) {
+  const size = Number(meta?.bytes)
+  if (!Number.isFinite(size)) return undefined
+  const mediaType = String(meta?.mediaType ?? '')
+  const name = typeof meta?.name === 'string' ? meta.name : undefined
+  const index = recentSentImages.findIndex((entry) => entry.size === size
+    && entry.mediaType === mediaType
+    && (name === undefined || entry.name === name))
+  if (index < 0) return undefined
+  return recentSentImages.splice(index, 1)[0]
+}
 
 /**
  * Fetch one attachment's bytes through the Host and remember them.
  * Idempotent, so a component can call it from a watcher on every change.
  * @param sessionId - the Session whose log proves the attachment.
  * @param attachmentId - durable attachment identity.
+ * @param meta - optional image-block metadata, used to reuse a blob this page just sent.
  */
-export function ensureAttachmentImage (sessionId, attachmentId) {
+export function ensureAttachmentImage (sessionId, attachmentId, meta) {
   // Text-only mode moves no image bytes at all: attachments are base64 payloads and the most expensive
   // thing the page can ask for over a slow link.
   if (state.lightweight) return
   if (sessionId === undefined || sessionId === null || attachmentId === '') return
   const key = `${sessionId}:${attachmentId}`
   if (attachmentImages.has(key) || attachmentPending.has(key)) return
+  // 刚由本页发出的图片：直接用它自己的 blob，不依赖宿主能不能按 id 读回来。
+  const local = takeSentImage(meta)
+  if (local !== undefined) {
+    attachmentImages.set(key, local.url)
+    return
+  }
   attachmentPending.add(key)
   api(`/api/attachment?sessionId=${encodeURIComponent(sessionId)}&attachmentId=${encodeURIComponent(attachmentId)}`)
     .then((payload) => {
@@ -595,6 +652,7 @@ export function ensureAttachmentImage (sessionId, attachmentId) {
     })
     .catch(() => {
       attachmentImages.set(key, '')
+      attachmentFailures.add(key)
     })
     .finally(() => {
       attachmentPending.delete(key)
@@ -604,6 +662,11 @@ export function ensureAttachmentImage (sessionId, attachmentId) {
 /** @returns the cached data URL for an attachment, or an empty string while it loads. */
 export function attachmentImage (sessionId, attachmentId) {
   return attachmentImages.get(`${String(sessionId)}:${String(attachmentId)}`) ?? ''
+}
+
+/** @returns whether fetching that attachment has already failed (so the UI can stop saying "加载中"). */
+export function attachmentImageFailed (sessionId, attachmentId) {
+  return attachmentFailures.has(`${String(sessionId)}:${String(attachmentId)}`)
 }
 
 /** @returns the joined text of a message's content blocks (tool results and other summaries). */
@@ -1776,6 +1839,15 @@ export async function sendPrompt (content, mode = 'queue', options = {}) {
     })
     // 发送成功（宿主已收下）：转录面板据此把自己贴回底部，读者马上能看到自己刚发的那条。
     state.promptSendCount += 1
+    // 把这次发送的图片 blob 记成"最近发出的图片"：等它对应的附件事件回来时直接本地回显。
+    for (const part of Array.isArray(content) ? content : []) {
+      if (part === null || typeof part !== 'object' || part.type !== 'image') continue
+      if (typeof part.uploadId !== 'string') continue
+      const staged = stagedImageBlobs.get(part.uploadId)
+      if (staged === undefined) continue
+      stagedImageBlobs.delete(part.uploadId)
+      rememberSentImage(staged)
+    }
   } catch (error) {
     state.actionError = String(error.message ?? error)
     // 交给调用方处理：输入框的草稿还在，读者可以直接重试。
@@ -1923,6 +1995,12 @@ export async function stageImage (file) {
     const uploaded = await uploadImage(prepared.blob, { mediaType: prepared.mediaType, name })
     const uploadId = typeof uploaded?.uploadId === 'string' ? uploaded.uploadId : ''
     if (uploadId === '') throw new Error('上传失败：宿主没有返回图片引用')
+    // 留一份 blob 给发送后的回显：宿主读不回附件时（见 `ensureAttachmentImage`），页面自己就能画出来。
+    stagedImageBlobs.set(uploadId, { blob: prepared.blob, mediaType: prepared.mediaType, name, size: prepared.blob.size })
+    while (stagedImageBlobs.size > 12) {
+      const oldest = stagedImageBlobs.keys().next().value
+      stagedImageBlobs.delete(oldest)
+    }
     return {
       uploadId,
       previewUrl,
