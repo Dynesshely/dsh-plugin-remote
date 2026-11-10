@@ -193,25 +193,46 @@ function mapGatewayProvider (entry, index) {
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined
   }
 
+  /**
+   * 窗口按上游**实际返回的**原样映射，缺失就是缺失。
+   *
+   * 这里不做任何「补齐」：没有 monthy 渠道（例如 OpenDesign Go 只有 5h + 7d）就只给两个窗口；
+   * 上游返回一个 total=0 / 没有配额的占位窗口（常见于「本月」）也不算有效窗口 —— 0/0 的进度条
+   * 只会把卡片撑长，读者读不到任何信息。点数字段（points/credits/remaining）原样带出去，供卡片
+   * 显示「点数」而不是伪造一个 used/total。
+   */
   const windows = []
+  const seenWindowKeys = new Set()
   for (const window of Array.isArray(entry?.windows) ? entry.windows : []) {
+    const key = String(window?.key ?? '')
+    if (seenWindowKeys.has(key)) continue
     const used = asNumber(window?.used) ?? 0
     const total = asNumber(window?.total)
-    if (total === undefined) continue
-    const ratio = total <= 0 ? 0 : Math.min(1, Math.max(0, used / total))
+    const points = asNumber(window?.points) ?? asNumber(window?.credits) ?? asNumber(window?.remaining)
+    const unit = typeof window?.unit === 'string' ? window.unit : undefined
+    // 没有正配额、也没有点数的窗口是占位，不画。
+    if ((total === undefined || total <= 0) && points === undefined) continue
+    const usableTotal = total !== undefined && total > 0 ? total : undefined
+    const ratio = usableTotal === undefined ? 0 : Math.min(1, Math.max(0, used / usableTotal))
+    seenWindowKeys.add(key)
     windows.push({
-      key: String(window?.key ?? ''),
-      label: WINDOW_LABELS[String(window?.key ?? '')] ?? String(window?.key ?? '窗口'),
+      key,
+      label: WINDOW_LABELS[key]
+        ?? (typeof window?.label === 'string' && window.label !== '' ? window.label : String(key === '' ? '窗口' : key)),
       used,
-      total,
+      total: usableTotal ?? used,
       ratio,
       exceeded: window?.exceeded === true,
       // Printed on the bar itself, so a reset moment never becomes another text row.
       resetAt: resetMoment(window?.resetAt),
+      ...(usableTotal === undefined ? { missingQuota: true } : {}),
+      ...(points === undefined ? {} : { points }),
+      ...(unit === undefined || unit === '' ? {} : { unit }),
     })
   }
 
   const lines = []
+  const period = entry?.period
   const plan = entry?.plan
   let planReset
   if (plan !== undefined && plan !== null) {
@@ -223,7 +244,6 @@ function mapGatewayProvider (entry, index) {
       value: `${String(plan.id ?? plan.status ?? '')}${renew === undefined ? '' : ` · ${renew} 续期`}`.trim(),
     })
   }
-  const period = entry?.period
   if (period !== undefined && period !== null) {
     const requests = asNumber(period.requests)
     const rate = asNumber(period.successRate)
