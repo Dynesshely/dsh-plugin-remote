@@ -396,6 +396,49 @@ function repairDotSeparators (value) {
   )
 }
 
+/**
+ * @param bytes - file bytes.
+ * @returns the image media type from its magic number, or undefined when it is not a known image.
+ */
+function sniffImageType (bytes) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png'
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes.length >= 6 && bytes.toString('latin1', 0, 3) === 'GIF') return 'image/gif'
+  if (bytes.length >= 12 && bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP') return 'image/webp'
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp'
+  return undefined
+}
+
+/**
+ * Read one attachment straight from the content-addressed store.
+ *
+ * The Session Controller's attachment surface is not stable across DSH versions — an earlier shape took
+ * `{ sessionId, attachmentId }`, the current one expects a reference object — and when it disagrees the
+ * route silently answered 404, which left every image stuck on a loading placeholder. The bytes live in a
+ * plain content-addressed directory (`<dsh home>/attachments/v1/objects/<ab>/<sha256>`), so reading them
+ * directly is both simpler and immune to that churn.
+ *
+ * The id is validated as 64 hex characters and the path is built from it, so nothing outside that store
+ * can be reached.
+ * @param attachmentId - `sha256:<hex>` or bare `<hex>`.
+ * @returns the bytes and media type, or undefined when it cannot be read.
+ */
+function readAttachmentObject (attachmentId) {
+  const hex = String(attachmentId ?? '').replace(/^sha256:/iu, '').trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/u.test(hex)) return undefined
+  const stored = join(homedir(), '.dsh', 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+  try {
+    const info = statSync(stored)
+    if (!info.isFile() || info.size > MAX_IMAGE_BYTES) return undefined
+    const bytes = readFileSync(stored)
+    const mediaType = sniffImageType(bytes)
+    if (mediaType === undefined) return undefined
+    return { bytes, mediaType }
+  } catch {
+    return undefined
+  }
+}
+
 /** @returns the Session catalog shaped for the page. */
 function sessionsOf (ctx) {
   const listed = ctx.sessionController.list({}, new AbortController().signal)
@@ -1633,6 +1676,13 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           height: value?.attachment?.height,
         })
       } catch (error) {
+        // The controller rejected the request (its signature differs across DSH versions); fall back to
+        // the content-addressed store so images do not stay on a loading placeholder.
+        const stored = readAttachmentObject(attachmentId)
+        if (stored !== undefined) {
+          json(200, { mediaType: stored.mediaType, data: stored.bytes.toString('base64') })
+          return
+        }
         json(404, { error: String(error?.message ?? error) })
       }
       return
