@@ -1,10 +1,11 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
 import { useLazyRender } from '../lib/lazy-render.js'
-import { renderMarkdown } from '../lib/markdown.js'
-import { attachmentImage, ensureAttachmentImage, state } from '../lib/store.js'
+import { extractFileReferences, renderMarkdown } from '../lib/markdown.js'
+import { attachmentImage, attachmentImageFailed, ensureAttachmentImage, state } from '../lib/store.js'
 import ToolCard from './ToolCard.vue'
 import QuestionCard from './QuestionCard.vue'
+import FileCard from './FileCard.vue'
 import AppIcon from './AppIcon.vue'
 
 /** Compact number formatting: 1234 → 1.2k. */
@@ -34,22 +35,34 @@ const groupOpen = ref(false)
 
 // Both sides of the conversation render Markdown: what the user typed is Markdown source. Gated on
 // `rendered`: off-screen rows show their text as-is, which costs nothing and still reads.
-const html = computed(() => (rendered.value && (props.item.kind === 'assistant' || props.item.kind === 'user')
-  ? renderMarkdown(props.item.text)
-  : ''))
+//
+// 消息里只有 `<path>…</path>` 标签与"整行就是本地路径"这两类会摘成文件卡片；图片引用照旧留在
+// markdown 里渲染成内联大图（`preparseLocalImages` / `proxyLocalImages` 的链路不动）。
+const segments = computed(() => {
+  if (!rendered.value) return []
+  if (props.item.kind !== 'assistant' && props.item.kind !== 'user') return []
+  const { parts } = extractFileReferences(props.item.text)
+  return parts.map((part) => (part.type === 'file' ? part : { type: 'text', html: renderMarkdown(part.value) }))
+})
 const reasoning = computed(() => String(props.item.reasoning ?? '').trim())
 /** The reasoning chain renders as markdown too, computed only while it is open. */
 const reasoningHtml = computed(() => (showReasoning.value ? renderMarkdown(reasoning.value) : ''))
 const images = computed(() => props.item.images ?? [])
 
 // Pull the bytes for any image this message carries; the Host reads them from the Session log.
+// `image` 的元信息（bytes/mediaType/name）也一起传过去：本页刚发出的图片可以直接用本地 blob 回显。
 watchEffect(() => {
-  for (const image of props.item.images ?? []) ensureAttachmentImage(state.selected, image.attachmentId)
+  for (const image of props.item.images ?? []) ensureAttachmentImage(state.selected, image.attachmentId, image)
 })
 
 /** @returns the cached data URL for one image, or '' while it loads. */
 function srcOf (image) {
   return attachmentImage(state.selected, image.attachmentId)
+}
+
+/** @returns whether that attachment failed to load (so the bubble stops saying "加载中"). */
+function failedOf (image) {
+  return attachmentImageFailed(state.selected, image.attachmentId)
 }
 
 /** @returns the call id while that question is still pending, otherwise '' (a read-only card). */
@@ -86,10 +99,16 @@ const groupState = computed(() => {
          
         >
           <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
+          <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-zinc-400 dark:text-zinc-500">图片不可用</span>
           <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-blue-50/80">加载中…</span>
         </button>
       </div>
-      <div v-if="item.text && rendered" class="md" v-html="html" />
+      <template v-if="item.text && rendered">
+        <template v-for="(part, index) in segments" :key="index">
+          <div v-if="part.type === 'text'" class="md" v-html="part.html" />
+          <FileCard v-else :file="part.file" />
+        </template>
+      </template>
       <div v-else-if="item.text" class="md md-plain">{{ item.text }}</div>
       <div v-if="item.files?.length" class="mt-1 flex flex-wrap gap-1 text-[11px] text-zinc-500 dark:text-zinc-400">
         <span v-for="file in item.files" :key="file">{{ file }}</span>
@@ -177,8 +196,13 @@ const groupState = computed(() => {
         <div class="md break-words text-[13px] text-zinc-500 dark:text-zinc-400" v-html="reasoningHtml" />
       </div>
     </div>
-    <div v-if="rendered" class="md break-words" v-html="html" />
-          <div v-else class="md md-plain break-words">{{ item.text }}</div>
+    <template v-if="rendered">
+      <template v-for="(part, index) in segments" :key="index">
+        <div v-if="part.type === 'text'" class="md break-words" v-html="part.html" />
+        <FileCard v-else :file="part.file" />
+      </template>
+    </template>
+    <div v-else class="md md-plain break-words">{{ item.text }}</div>
     <div v-if="images.length" class="mt-2 flex flex-wrap gap-2">
       <button
         v-for="image in images"
@@ -188,6 +212,7 @@ const groupState = computed(() => {
        
       >
         <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
+        <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-zinc-400">图片不可用</span>
         <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-zinc-400">加载中…</span>
       </button>
     </div>
