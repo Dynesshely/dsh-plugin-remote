@@ -26,6 +26,16 @@ export const state = reactive({
   lightweight: false,
   /** How much of the opening snapshot has arrived, for the progress pill. */
   snapshotProgress: { ...EMPTY_SNAPSHOT_PROGRESS },
+  /**
+   * 更旧的分片前插到窗口头部的**累计条数**（单调递增）。
+   *
+   * 宿主按「从新到旧」发分片（见 index.js 的 `pumpSession`）：第一块就是最新窗口，后续每块更旧、前插到
+   * 头部。前插会改变内容总高度，界面必须据此做滚动补偿 —— 计数器只是为了触发那个 watcher，DOM 上的
+   * 差值由 ConversationPane 自己读。
+   */
+  snapshotPrepend: 0,
+  /** 最近一次前插的事件条数。 */
+  snapshotPrepended: 0,
   /** When the current snapshot started, on the monotonic clock. */
   snapshotStartedAt: 0,
   /** How long the opening snapshot took, in milliseconds. */
@@ -1543,43 +1553,99 @@ function applySnapshot (frame, incoming) {
   replaceEvents(frame, incoming)
 }
 
+/**
+ * 把一块**更旧**的分片前插到事件窗口头部（宿主从新到旧发分片的落地路径）。
+ *
+ * 第一帧 `snapshot` 就是最新窗口，所以首屏一落地就能显示最新内容；后续的 `snapshot-append` 都比当前
+ * 窗口更旧，只能插到头部，事件窗口必须始终保持 `seq` 升序且没有重复。
+ *
+ * 返回真正前插的条数；滚动补偿由 ConversationPane 用「前 scrollHeight / 后 scrollHeight」自己算，
+ * 这里只负责数据与计数，不碰 DOM。
+ * @param frame - 触发它的分片帧（用于进度与 `last` 判定）。
+ * @param incoming - 这块分片里的事件（按 seq 升序）。
+ * @returns 实际新增的条数。
+ */
+function prependOlderEvents (frame, incoming) {
+  trackSnapshot(frame)
+  if (!Array.isArray(incoming) || incoming.length === 0) return 0
+  const firstSeq = Number(state.events[0]?.seq)
+  // 只接受比窗口起点更旧的事件：重复块（重连后重发）在这里被无声丢掉。
+  const older = Number.isFinite(firstSeq)
+    ? incoming.filter((event) => {
+      const seq = Number(event?.seq)
+      return Number.isFinite(seq) && seq < firstSeq
+    })
+    : incoming
+  if (older.length === 0) return 0
+  const merged = mergeBySeq(older, state.events)
+  if (merged === state.events) return 0
+  const before = state.events.length
+  state.events = merged
+  // 窗口本身受 MAX_EVENTS 约束，前插同样要裁剪（裁剪从头部丢，语义仍是"最旧的先走"）。
+  trimEvents()
+  state.snapshotPrepended = state.events.length - before
+  state.snapshotPrepend += older.length
+  state.telemetry.running = selectedSession.value?.running === true
+  return older.length
+}
+
+/**
+ * 合并两段都按 `seq` 升序的事件列表：去重、升序、**已有对象优先**。
+ *
+ * 保留 `state.events` 里已有的对象身份很重要：Vue 的行、MessageRow 的本地状态都绑在对象上，
+ * 能复用就不重建。没有任何新增时返回原数组（调用方据此跳过状态更新）。
+ * @param older - 更旧的一段。
+ * @param current - 当前窗口。
+ */
+function mergeBySeq (older, current) {
+  const bySeq = new Map()
+  const withoutSeq = []
+  for (const event of current) {
+    const seq = Number(event?.seq)
+    if (Number.isFinite(seq)) bySeq.set(seq, event)
+    else withoutSeq.push(event)
+  }
+  let added = 0
+  for (const event of older) {
+    const seq = Number(event?.seq)
+    if (!Number.isFinite(seq)) {
+      withoutSeq.unshift(event)
+      added += 1
+      continue
+    }
+    if (bySeq.has(seq)) continue
+    bySeq.set(seq, event)
+    added += 1
+  }
+  if (added === 0) return current
+  const ordered = [...bySeq.entries()].sort((left, right) => left[0] - right[0]).map((entry) => entry[1])
+  return [...withoutSeq, ...ordered]
+}
+
 function handleFrame (frame) {
   if (frame === null || typeof frame !== 'object') return
   if (frame.type === 'snapshot') {
     pendingSnapshot = undefined
     const chunk = eventsOf(frame)
-    // 分片快照（last === false）且窗口里已有内容：整份攒起来，等最后一段再对账（见 pendingSnapshot）。
-    // 窗口为空时是真正的会话切换：照旧先画第一段，让内容早一点出现。
-    if (frame.last === false && state.events.length > 0) {
-      pendingSnapshot = { records: chunk }
+    // 分片快照的第一帧是**最新**的一块（宿主从新到旧发）：立刻落地，首屏就是最新内容，不等旧的块。
+    if (Number(frame.chunkCount) > 1) {
+      replaceEvents(frame, chunk)
       return
     }
     applySnapshot(frame, chunk)
     return
   }
   if (frame.type === 'snapshot-append') {
-    if (pendingSnapshot !== undefined) {
-      const more = eventsOf(frame)
-      if (more.length > 0) pendingSnapshot.records.push(...more)
-      // 攒着的分片同样有上限：窗口本身受 MAX_EVENTS 约束，超出说明这份快照已经不可信。
-      if (pendingSnapshot.records.length > MAX_EVENTS) {
-        pendingSnapshot = undefined
-        state.needsResync = true
-      }
-      if (frame.last === true && pendingSnapshot !== undefined) {
-        const incoming = pendingSnapshot.records
-        pendingSnapshot = undefined
-        applySnapshot(frame, incoming)
-      }
-      return
-    }
-    // 没有攒快照时照旧增量拼接：真正的会话切换会走这条（首段已经替换，剩下的分片直接追加）。
-    trackSnapshot(frame)
     const more = eventsOf(frame)
-    if (more.length > 0) {
-      state.events.push(...more)
-      // 分片的其余部分同样受上限约束，否则一个超大快照就能把窗口撑到无界。
-      trimEvents()
+    // `older: false` 是旧宿主（从旧到新）的语义；新宿主每块都更旧，前插到头部。
+    if (frame.older === false) {
+      trackSnapshot(frame)
+      if (more.length > 0) {
+        state.events.push(...more)
+        trimEvents()
+      }
+    } else {
+      prependOlderEvents(frame, more)
     }
     if (frame.last === true) finishSessionLoad()
     return

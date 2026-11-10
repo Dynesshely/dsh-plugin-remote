@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { loadModels, loadOlder, loadPermissions, loadState, selectedSession, state, transcriptItems } from '../lib/store.js'
 import { mobile } from '../lib/layout.js'
 import { activeTick, promptTicks } from '../lib/rail.js'
@@ -153,19 +153,24 @@ const scroller = ref(null)
 // scrolls them.
 watch(scroller, (element) => {
   setScrollRoot(element)
-  // 滚动容器刚拿到手时也钉一次：首屏内容可能已经在这一刻之前就渲染完了。
-  if (element !== null) pinBottomFor(600)
 }, { immediate: true })
 const sticky = ref(true)
+
 /**
- * 补偿贴底的待执行帧/定时器。
+ * 「算作在底部」的距离阈值（像素）。
  *
- * 首屏快照是分片到达的，图片/字体还会在后面把内容撑高；单靠「行数变化 → 贴底」会在这些时候漏掉。
- * 所以在切会话、首屏完成、发送成功时补两次贴底（下一帧 + 260ms），覆盖延迟增长。窗口结束后完全回到
- * 既有的 sticky 逻辑 —— 不做任何逐帧测量。
+ * 判定只用 `scrollHeight − scrollTop − clientHeight`，不靠滚动方向猜。取 20px：比 1px 的抖动宽容，
+ * 又不足以把「离底还有半屏」误判成跟随。
  */
-let pinFrame
-let pinTimer
+const STICKY_GAP = 20
+
+/** @returns 滚动容器当前是否贴着底部（没有容器时按贴底算）。 */
+function atBottom () {
+  const node = scroller.value
+  if (node === null) return true
+  return node.scrollHeight - node.scrollTop - node.clientHeight <= STICKY_GAP
+}
+
 const showLiveReasoning = ref(false)
 /** Index of the prompt currently being read, for the rail's active tick. */
 const activePrompt = ref(-1)
@@ -259,55 +264,51 @@ async function loadEarlier () {
 
 /** Jump to the newest content only while the reader is already at the bottom. */
 function onScroll () {
-  const node = scroller.value
-  if (node === null) return
-  sticky.value = node.scrollHeight - node.scrollTop - node.clientHeight < 60
+  if (scroller.value === null) return
+  sticky.value = atBottom()
   schedulePromptSync()
-}
-
-/** 取消挂起的补偿贴底（切会话/卸载时用，避免旧会话的定时器把新会话拽回底部）。 */
-function clearPinTimers () {
-  if (pinFrame !== undefined) {
-    cancelAnimationFrame(pinFrame)
-    pinFrame = undefined
-  }
-  if (pinTimer !== undefined) {
-    clearTimeout(pinTimer)
-    pinTimer = undefined
-  }
 }
 
 /**
  * 立刻贴到底部（instant，不用 smooth：弱网下平滑滚动会跟丢目标，反而停在半路）。
  *
- * 只在 `sticky` 仍然为真时执行 —— 读者在这几百毫秒里手动上滚了，就绝不把他拽回来。
+ * 每次只读一次 `scrollHeight`（一次同步布局），并且只在渲染完成之后调用 —— 不是逐帧测量。
  */
-function pinToBottom () {
-  if (!sticky.value) return
+function pinNow () {
   const node = scroller.value
   if (node === null) return
   node.scrollTop = node.scrollHeight
 }
 
-/**
- * 钉底一段时间：nextTick 后一次、下一帧一次、再延时一次。
- * @param ms - 窗口长度；最后一次补滚取它的一半（120–400ms），覆盖图片/字体造成的延迟撑高。
- */
-function pinBottomFor (ms) {
-  sticky.value = true
-  clearPinTimers()
-  void nextTick(() => {
-    pinToBottom()
-    pinFrame = window.requestAnimationFrame(() => {
-      pinFrame = undefined
-      pinToBottom()
-    })
-    pinTimer = window.setTimeout(() => {
-      pinTimer = undefined
-      pinToBottom()
-    }, Math.min(400, Math.max(120, ms / 2)))
-  })
+/** 等本帧 DOM 更新完成（绘制之前）再贴底：不用 smooth、不用 rAF、不用 setTimeout。 */
+function pinAfterRender () {
+  void nextTick(pinNow)
 }
+
+/**
+ * 更旧的分片前插到窗口头部时的滚动补偿。
+ *
+ * 宿主现在「从新到旧」发分片：第一帧是最新窗口（立刻可见、立刻贴底），后续每一帧都更旧、插在头部。
+ * 前插会把内容整体往下推，若不管 `scrollTop`，读者会看到画面跳一大截。
+ *
+ * 补偿只做三次 DOM 操作：**前 scrollHeight 读数 → nextTick 后后 scrollHeight 读数 → 一次赋值**。
+ *  - 读者原本贴着底部：继续贴底（`scrollTop = scrollHeight`），新内容在上方增长，视线仍在最新处；
+ *  - 读者已经上翻：`scrollTop += 新增高度`，视口里那几行原地不动（offset 不跳变）。
+ * 两次读数之间不插 rAF / setTimeout，所以补偿与渲染发生在同一帧，浏览器不会画出中间态。
+ */
+watch(() => state.snapshotPrepend, async () => {
+  const node = scroller.value
+  if (node === null) return
+  const heightBefore = node.scrollHeight
+  const topBefore = node.scrollTop
+  const wasAtBottom = atBottom()
+  await nextTick()
+  if (node.scrollHeight === heightBefore) return
+  sticky.value = wasAtBottom
+  node.scrollTop = wasAtBottom
+    ? node.scrollHeight
+    : topBefore + (node.scrollHeight - heightBefore)
+})
 
 watch([() => transcriptItems.value.length, () => state.selected], async () => {
   await nextTick()
@@ -324,39 +325,35 @@ watch([() => transcriptItems.value.length, () => state.selected], async () => {
 async function scrollToBottomIfSticky () {
   if (!sticky.value) return
   await nextTick()
-  const node = scroller.value
-  if (node !== null) node.scrollTop = node.scrollHeight
+  pinNow()
 }
 
-// 只跟着「新的消息行」贴底；流式文本由下面的渲染回调负责。
+// 新的消息行（首屏最新块、实时事件）：贴底状态下立刻跟到底部；上翻状态下不动位置。
 watch(() => transcriptItems.value.length, () => {
   void scrollToBottomIfSticky()
 })
 
 watch(() => state.selected, async () => {
   showLiveReasoning.value = false
-  // 新会话从头看最新内容：清掉上一个会话的补偿贴底，再重新钉一次底部。
-  pinBottomFor(600)
+  // 切换会话从最新内容看起：新会话的加载态就按"贴底"对待。
+  sticky.value = true
   await Promise.all([loadPermissions(state.selected), loadModels()])
 })
 
 /**
- * 首屏快照完成：内容第一次到齐，把视图钉到最新的一屏。
+ * 首屏快照完成（最旧的一块也到了）：历史补齐，已贴底就继续跟住。
  *
- * 这是「会话内容从最新往前看」的落地点 —— 数据本来给的就是最近窗口（宿主 follow 从末尾往回走），
- * 缺的只是首屏把滚动位置放到底部；`加载更早` 仍然在顶部，往更早翻。
+ * 内容早已可见（第一帧就是最新的），这里不做任何隐藏/解隐；也**不强行**把已经上翻的读者拽回底部。
  */
 watch(() => state.sessionLoading, (loading) => {
-  if (loading) {
-    clearPinTimers()
-    return
-  }
-  pinBottomFor(400)
+  if (loading === true) return
+  if (sticky.value) pinAfterRender()
 })
 
-/** 发送 prompt 成功后立刻贴底：读者刚发出自己的消息，应当马上看到它（弱网下用 instant）。 */
+/** 发送 prompt 成功后立刻贴底：读者刚发出自己的消息，应当马上看到它（instant，一次 nextTick）。 */
 watch(() => state.promptSendCount, () => {
-  pinBottomFor(600)
+  sticky.value = true
+  pinAfterRender()
 })
 
 /**
@@ -505,11 +502,22 @@ const unbindLive = bindStream(() => state.live.text, liveHtml, () => {
 })
 const unbindLiveReasoning = bindStream(() => state.live.reasoning, liveReasoningHtml)
 
+/**
+ * 唯一保留的兜底：字体加载完成后行高还会变，贴底一次。
+ *
+ * 一次性（promise 只 resolve 一次），并且仍在渲染之后执行，不会产生可见跳动；没有再用定时器。
+ */
+onMounted(() => {
+  const fonts = document.fonts
+  if (fonts === undefined || typeof fonts.ready?.then !== 'function') return
+  void fonts.ready.then(() => {
+    if (sticky.value) pinAfterRender()
+  })
+})
+
 onBeforeUnmount(() => {
   unbindLive()
   unbindLiveReasoning()
-  // 卸载后不该再有补偿贴底的定时器/帧在跑。
-  clearPinTimers()
 })
 </script>
 
@@ -722,7 +730,7 @@ onBeforeUnmount(() => {
         <div class="transcript mx-auto flex max-w-3xl flex-col"
       :class="dense ? 'gap-2' : 'gap-4'">
           <!-- The opening window is bounded, so a long Session pages backwards from here. -->
-          <div v-if="state.hasOlder && transcriptItems.length > 0" class="flex flex-col items-center gap-1.5">
+          <div v-if="state.hasOlder && transcriptItems.length > 0 && state.sessionLoading !== true" class="flex flex-col items-center gap-1.5">
             <div class="flex items-center gap-2">
               <button class="chip" type="button" :disabled="state.loadingOlder" @click="loadEarlier">
                 <AppIcon
