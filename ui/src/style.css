@@ -968,6 +968,41 @@ body {
   z-index: 1;
 }
 
+/* Hover fill.
+
+   The tile has no background of its own (the artwork brings its own edge), but it is a button: hovering
+   should feel like the icon buttons beside it. A pseudo-element supplies the fill instead of \`background\`,
+   which the reset above pins to transparent. It sits under the artwork, and the closing \`::before\` ring
+   stays on top of everything. */
+.brand-tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(0 0 0 / 0.06);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brand-tile::after {
+    background: rgb(255 255 255 / 0.12);
+  }
+}
+
+.brand-tile:hover::after,
+.brand-tile:focus-visible::after {
+  opacity: 1;
+}
+
+/* The artwork must sit above the fill; the ring stays above both. */
+.brand-tile img {
+  position: relative;
+  z-index: 1;
+}
+
 .brand-tile:hover::before,
 .brand-tile:focus-visible::before {
   opacity: 1;
