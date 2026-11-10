@@ -1094,21 +1094,34 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       for await (const frame of stream) {
         if (client.closed || client.sessionAbort !== controller) return
         if (frame?.type === 'snapshot' && Array.isArray(frame.records) && frame.records.length > SNAPSHOT_CHUNK) {
-          // Chunked: the page folds each piece as it lands, so no single SSE event grows without limit and
-          // the first content paints sooner.
+          // 分片必须**从新到旧**发送：第一帧就是最新的一块，页面的首屏一落地就是最新内容；随后每一块
+          // 都比当前窗口更旧，客户端按 `older` 前插到事件窗口头部（不能追加到尾部）。
+          //
+          // 旧实现从索引 0 开始发（最新的在最后一帧），读者要先等全部块到齐才看到内容，而且期间看到的是
+          // 最旧的一屏 —— 这正是「先看到顶部再跳到底部」的来源。
           const records = frame.records
-          for (let at = 0; at < records.length; at += SNAPSHOT_CHUNK) {
+          const chunkCount = Math.ceil(records.length / SNAPSHOT_CHUNK)
+          const totalRecords = records.length
+          /** @returns 记录的事件序号（没有则 undefined）。 */
+          const seqOf = (record) => (typeof record?.event?.seq === 'number' ? record.event.seq : undefined)
+          for (let index = 0; index < chunkCount; index += 1) {
             if (client.closed || client.sessionAbort !== controller) return
-            const chunk = records.slice(at, at + SNAPSHOT_CHUNK)
-            const last = at + SNAPSHOT_CHUNK >= records.length
-            // The reader cannot tell how much is left from the transcript alone, so each chunk says where
-            // it sits in the sequence.
+            // 从数组末尾往前切：index 0 是最新的一块，最后一块是最旧的（`last: true` 表示历史补齐结束）。
+            const end = records.length - index * SNAPSHOT_CHUNK
+            const start = Math.max(0, end - SNAPSHOT_CHUNK)
+            const chunk = records.slice(start, end)
+            const last = start === 0
+            // 每帧带定位信息：客户端据此判断这块是"更旧"还是"更新"，以及它的 seq 区间与是否最旧。
             const progress = {
-              chunkIndex: at / SNAPSHOT_CHUNK,
-              chunkCount: Math.ceil(records.length / SNAPSHOT_CHUNK),
-              totalRecords: records.length,
+              chunkIndex: index,
+              chunkCount,
+              totalRecords,
+              older: index > 0,
+              oldest: last,
+              fromSeq: seqOf(chunk[0]),
+              toSeq: seqOf(chunk[chunk.length - 1]),
             }
-            writeEvent(client, 'frame', at === 0
+            writeEvent(client, 'frame', index === 0
               ? { type: 'snapshot', records: chunk, last, ...progress }
               : { type: 'snapshot-append', records: chunk, last, ...progress })
           }
