@@ -41,7 +41,7 @@ const ringTone = computed(() => {
 <template>
   <!-- One line, exact toolbar height, horizontally scrollable rather than wrapping. The run state
        itself lives in the conversation header, so this row only carries measurements. -->
-  <div class="glass-soft no-scrollbar flex h-9 items-center gap-x-3 overflow-x-auto rounded-xl px-3 text-[11px] whitespace-nowrap text-zinc-500 dark:text-zinc-400">
+  <div class="status-chip glass-soft no-scrollbar flex h-9 items-center gap-x-3 overflow-x-auto rounded-xl px-3 text-[11px] whitespace-nowrap text-secondary">
 
     <span
       v-if="occupancy !== undefined"

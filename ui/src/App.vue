@@ -10,6 +10,8 @@ import ConversationPane from './components/ConversationPane.vue'
 import RightPane from './components/RightPane.vue'
 
 const THEME_KEY = 'rc.theme'
+/** 皮肤选择：`glass`（默认，当前视觉）/ `md3`。写在 `<html data-skin>` 上，令牌层按它选值。 */
+const SKIN_KEY = 'rc.skin'
 const SIDEBAR_KEY = 'rc.sidebar'
 /** Sidebar column width, padding included. */
 const SIDEBAR_WIDTH = '18.5rem'
@@ -23,6 +25,8 @@ const filesWidth = ref(Number(window.localStorage.getItem('rc.filesWidth') ?? '1
 const filesResizing = ref(false)
 const sidebar = ref(window.localStorage.getItem(SIDEBAR_KEY) !== '0')
 const theme = ref(window.localStorage.getItem(THEME_KEY) ?? 'system')
+/** 已保存的皮肤：只有明确的 `md3` 才换，其它（含未设置）一律回到玻璃 —— 默认视觉不变。 */
+const skin = ref(window.localStorage.getItem(SKIN_KEY) === 'md3' ? 'md3' : 'glass')
 const token = ref('')
 const loginError = ref('')
 
@@ -81,6 +85,15 @@ function retryBoot () {
 function applyTheme () {
   const dark = theme.value === 'dark' || (theme.value === 'system' && media.matches)
   document.documentElement.classList.toggle('dark', dark)
+}
+
+/**
+ * 把皮肤写到 `<html data-skin>`：令牌层用 `[data-skin='…']` 选那四组值。
+ *
+ * 不碰任何组件类 —— 阶段 A 只有令牌，视觉仍由既有的 Tailwind 类决定（所以默认 glass 时像素不变）。
+ */
+function applySkin () {
+  document.documentElement.dataset.skin = skin.value
 }
 
 /**
@@ -231,6 +244,11 @@ watch(theme, () => {
   applyTheme()
 })
 
+watch(skin, () => {
+  window.localStorage.setItem(SKIN_KEY, skin.value)
+  applySkin()
+})
+
 /** Escape closes the drawer on narrow screens. */
 function onKeydown (event) {
   if (event.key === 'Escape' && drawer.value) drawer.value = false
@@ -265,6 +283,7 @@ function onTouchEnd (event) {
 
 onMounted(async () => {
   applyTheme()
+  applySkin()
   media.addEventListener('change', applyTheme)
   window.addEventListener('keydown', onKeydown)
   try {
@@ -303,7 +322,7 @@ async function submitToken () {
   >
     <!-- Liquid-glass backdrop: drifting colour fields that also cycle hue, so the frosted panels
          sit on something that keeps moving. -->
-    <div class="drift-hue pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+    <div class="liquid-backdrop drift-hue pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       <div class="drift-a absolute -left-28 -top-32 h-[28rem] w-[28rem] rounded-full bg-blue-400/40 blur-3xl dark:bg-blue-600/30" />
       <div class="drift-b absolute -right-24 top-1/5 h-96 w-96 rounded-full bg-fuchsia-400/30 blur-3xl dark:bg-fuchsia-600/25" />
       <div class="drift-c absolute -bottom-28 left-1/4 h-[26rem] w-[26rem] rounded-full bg-emerald-300/35 blur-3xl dark:bg-teal-500/25" />
@@ -395,6 +414,7 @@ async function submitToken () {
 
       <ConversationPane
         v-model:theme="theme"
+        v-model:skin="skin"
         class="min-w-0 flex-1"
         @toggle-sidebar="toggleSidebar"
         @toggle-files="toggleFiles"

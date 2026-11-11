@@ -351,7 +351,7 @@ function entriesFor (session) {
       <button
         type="button"
         class="brand-tile h-8 w-8 transition-transform duration-200 hover:scale-105 active:scale-95"
-        :class="dshOpen ? 'ring-2 ring-blue-400/60' : ''"
+        :class="dshOpen ? 'ring-2 ring-primary' : ''"
         title="DSH 菜单"
         @click="openDsh"
       >
@@ -362,7 +362,7 @@ function entriesFor (session) {
       <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-wide">DSH REMOTE</span>
       <span
         class="h-2 w-2 shrink-0 rounded-full"
-        :class="state.streamError ? 'bg-amber-400 pulse' : 'bg-emerald-500'"
+        :class="state.streamError ? 'bg-warning pulse' : 'bg-success'"
         :title="state.streamError || '已连接'"
       />
       <button class="icon-btn h-7 w-7" type="button" title="收起侧栏" @click="emit('close')">
@@ -372,7 +372,7 @@ function entriesFor (session) {
 
     <div class="px-3 pb-2">
       <div class="relative">
-        <AppIcon name="search" :size="14" class="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-zinc-400" />
+        <AppIcon name="search" :size="14" class="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-tertiary" />
         <input v-model="query" class="field pl-9" placeholder="搜索会话" />
       </div>
       <!-- New Session sits next to the search box, and asks for the workspace and the mode. -->
@@ -392,28 +392,28 @@ function entriesFor (session) {
         <!-- Workspace level: bigger, bolder, clearly the parent of the rows below. -->
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+          class="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-fill-chip"
           :aria-expanded="!isCollapsed(group.id)"
           @click="toggle(group.id)"
         >
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-b from-white/80 to-white/40 text-zinc-500 shadow-[0_2px_8px_-6px_rgb(15_23_42/0.6)] dark:from-white/[0.14] dark:to-white/[0.06] dark:text-zinc-300">
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-b from-white/80 to-white/40 text-secondary shadow-[0_2px_8px_-6px_rgb(15_23_42/0.6)] dark:from-white/[0.14] dark:to-white/[0.06] text-muted">
             <AppIcon name="layers" :size="13" />
           </span>
           <span class="min-w-0 flex-1">
-            <span class="block truncate text-[13px] font-semibold text-zinc-700 dark:text-zinc-100">
+            <span class="block truncate text-[13px] font-semibold text-strong">
               {{ group.title || group.path || '工作区' }}
             </span>
-            <span v-if="group.path" class="block truncate text-[10px] font-normal text-zinc-400">
+            <span v-if="group.path" class="block truncate text-[10px] font-normal text-tertiary">
               {{ group.path }}
             </span>
           </span>
-          <span class="shrink-0 rounded-full bg-white/60 px-1.5 text-[10px] text-zinc-500 dark:bg-white/10 dark:text-zinc-400">
+          <span class="shrink-0 rounded-full bg-fill-tint px-1.5 text-[10px] text-secondary">
             {{ group.sessions.length }}
           </span>
           <AppIcon
             name="chevron"
             :size="13"
-            class="shrink-0 text-zinc-400 transition-transform duration-200"
+            class="shrink-0 text-tertiary transition-transform duration-200"
             :class="isCollapsed(group.id) ? '-rotate-90' : ''"
           />
         </button>
@@ -421,46 +421,46 @@ function entriesFor (session) {
         <!-- Session level: indented behind a guide line so the hierarchy reads at a glance. -->
         <div
           v-if="!isCollapsed(group.id)"
-          class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-zinc-900/10 pl-2.5 dark:border-white/10"
+          class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5 dark:border-white/10"
         >
           <div
             v-for="session in visibleSessions(group)"
             :key="session.id"
             class="group/row flex items-center gap-1 rounded-xl pr-1 transition-all duration-200"
             :class="session.id === state.selected
-              ? 'bg-white/80 shadow-[0_4px_16px_-10px_rgb(15_23_42/0.5)] dark:bg-white/[0.12]'
-              : 'hover:bg-white/50 dark:hover:bg-white/[0.06]'"
+              ? 'bg-fill-hover shadow-[0_4px_16px_-10px_rgb(15_23_42/0.5)]'
+              : 'hover:bg-fill-chip'"
           >
             <button type="button" class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2 text-left text-[13px]" @click="open(session.id)">
               <!-- The status dot always stays put; pinning only adds a marker on the right. -->
               <span
                 class="h-1.5 w-1.5 shrink-0 rounded-full"
-                :class="session.running ? 'bg-emerald-500 pulse' : session.origin === 'subagent' ? 'bg-violet-400' : 'bg-zinc-300 dark:bg-zinc-600'"
+                :class="session.running ? 'bg-success pulse' : session.origin === 'subagent' ? 'bg-primary' : 'bg-fill-strong bg-fill-strong'"
               />
               <input
                 v-if="renamingId === session.id"
                 ref="renameInput"
                 v-model="renameDraft"
-                class="min-w-0 flex-1 rounded-lg border border-sky-400/60 bg-white/80 px-1.5 py-0.5 text-[13px] outline-none dark:bg-black/40"
+                class="min-w-0 flex-1 rounded-lg border border-primary bg-white/80 px-1.5 py-0.5 text-[13px] outline-none dark:bg-black/40"
                 @click.stop
                 @keydown.enter.prevent="commitRename"
                 @keydown.esc.prevent="cancelRename"
                 @blur="commitRename"
               />
-              <span v-else class="min-w-0 flex-1 truncate text-zinc-600 dark:text-zinc-300">{{ session.title || session.id }}</span>
-              <span class="shrink-0 text-[10px] text-zinc-400">{{ ago(session.updatedAt) }}</span>
+              <span v-else class="min-w-0 flex-1 truncate text-muted">{{ session.title || session.id }}</span>
+              <span class="shrink-0 text-[10px] text-tertiary">{{ ago(session.updatedAt) }}</span>
               <!-- Lucide's pushpin reads as "pinned" without the hand-drawn drop shape. -->
               <Pin
                 v-if="isPinned(session.id)"
                 :size="13"
                 :stroke-width="2"
-                class="shrink-0 text-sky-500 dark:text-sky-300"
+                class="shrink-0 text-primary text-primary"
                 title="已置顶"
               />
             </button>
             <button
               type="button"
-              class="grid h-6 w-6 shrink-0 place-items-center rounded-lg text-zinc-400 opacity-0 transition-opacity group-hover/row:opacity-100 focus:opacity-100"
+              class="grid h-6 w-6 shrink-0 place-items-center rounded-lg text-tertiary opacity-0 transition-opacity group-hover/row:opacity-100 focus:opacity-100"
               :class="menuFor === session.id ? 'opacity-100' : ''"
               :title="'会话操作'"
               @click.stop="openMenu(session, $event)"
@@ -473,7 +473,7 @@ function entriesFor (session) {
           <button
             v-if="hiddenCountOf(group) > 0"
             type="button"
-            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-zinc-400 transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-tertiary transition-colors hover:bg-fill-chip"
             :aria-expanded="false"
             @click.stop="expandGroup(group.id)"
           >
@@ -483,7 +483,7 @@ function entriesFor (session) {
           <button
             v-else-if="isExpanded(group)"
             type="button"
-            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-zinc-400 transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+            class="mt-0.5 flex w-full items-center gap-1 rounded-lg px-2 py-1 text-left text-[11px] text-tertiary transition-colors hover:bg-fill-chip"
             :aria-expanded="true"
             @click.stop="collapseGroup(group.id)"
           >
@@ -497,21 +497,21 @@ function entriesFor (session) {
       <div v-if="view.archived.length > 0" class="mt-3">
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[11px] text-zinc-400 transition-colors hover:bg-white/50 dark:hover:bg-white/[0.06]"
+          class="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[11px] text-tertiary transition-colors hover:bg-fill-chip"
           :aria-expanded="archivedOpen"
           @click="archivedOpen = !archivedOpen"
         >
           <AppIcon name="chevron" :size="12" class="transition-transform duration-200" :class="archivedOpen ? '' : '-rotate-90'" />
           <span class="flex-1">已归档</span>
-          <span class="rounded-full bg-white/60 px-1.5 text-[10px] dark:bg-white/10">{{ view.archived.length }}</span>
+          <span class="rounded-full bg-fill-tint px-1.5 text-[10px]">{{ view.archived.length }}</span>
         </button>
-        <div v-if="archivedOpen" class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-zinc-900/10 pl-2.5 dark:border-white/10">
+        <div v-if="archivedOpen" class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5 dark:border-white/10">
           <div
             v-for="session in view.archived"
             :key="session.id"
-            class="flex items-center gap-1 rounded-xl pr-1 hover:bg-white/50 dark:hover:bg-white/[0.06]"
+            class="flex items-center gap-1 rounded-xl pr-1 hover:bg-fill-chip"
           >
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2 text-left text-[13px] text-zinc-400" @click="open(session.id)">
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2 text-left text-[13px] text-tertiary" @click="open(session.id)">
               <AppIcon name="layers" :size="12" class="shrink-0 opacity-60" />
               <span class="min-w-0 flex-1 truncate">{{ session.title || session.id }}</span>
             </button>
@@ -520,7 +520,7 @@ function entriesFor (session) {
         </div>
       </div>
 
-      <p v-if="view.groups.length === 0 && view.archived.length === 0" class="px-3 py-6 text-center text-xs text-zinc-400">
+      <p v-if="view.groups.length === 0 && view.archived.length === 0" class="px-3 py-6 text-center text-xs text-tertiary">
         没有匹配的会话
       </p>
     </div>
@@ -534,10 +534,10 @@ function entriesFor (session) {
     <Teleport to="body">
       <div v-if="dshOpen" class="fixed inset-0 z-[124]" @click="dshOpen = false" />
       <div v-if="dshOpen" class="card pop fixed top-3 left-3 z-[125] w-64 overflow-hidden p-1.5">
-        <p class="px-2.5 pt-1.5 pb-2 text-[11px] font-medium tracking-wide text-zinc-400">DSH</p>
+        <p class="px-2.5 pt-1.5 pb-2 text-[11px] font-medium tracking-wide text-tertiary">DSH</p>
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/60 dark:hover:bg-white/[0.08]"
+          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-fill-tint-hover"
           :disabled="dshBusy !== ''"
           @click="controlDsh('restart')"
         >
@@ -546,24 +546,24 @@ function entriesFor (session) {
         </button>
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-rose-500 transition-colors hover:bg-rose-500/10"
+          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-danger transition-colors hover:bg-danger-soft"
           :disabled="dshBusy !== ''"
           @click="controlDsh('exit')"
         >
           <AppIcon name="power" :size="14" class="opacity-80" />
           <span class="flex-1">{{ armed === 'exit' ? '再次点击确认退出' : '退出 DSH' }}</span>
         </button>
-        <div class="mx-2 my-1.5 border-t border-white/50 dark:border-white/10" />
-        <div class="px-2.5 py-1.5 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-          <p class="mb-1 font-medium text-zinc-400">关于</p>
+        <div class="mx-2 my-1.5 border-t border-outline-medium" />
+        <div class="px-2.5 py-1.5 text-[11px] leading-relaxed text-secondary">
+          <p class="mb-1 font-medium text-tertiary">关于</p>
           <p>远程遥控插件 · v1.0.0</p>
           <p>监听 {{ state.bind || '—' }}</p>
           <template v-if="info !== undefined">
-            <p v-if="info.error" class="text-rose-500">读取失败：{{ info.error }}</p>
+            <p v-if="info.error" class="text-danger">读取失败：{{ info.error }}</p>
             <template v-else>
               <p>DSH pid {{ info.pid }} · node {{ info.node }}<span v-if="info.electron"> · electron {{ info.electron }}</span></p>
               <p class="break-all">启动器 {{ info.launcher }}</p>
-              <p v-if="info.launcherExists === false" class="text-rose-500">启动器不存在，重启会失败</p>
+              <p v-if="info.launcherExists === false" class="text-danger">启动器不存在，重启会失败</p>
             </template>
           </template>
           <p v-else class="opacity-60">正在读取…</p>
@@ -597,30 +597,30 @@ function entriesFor (session) {
     <Teleport to="body">
       <div
         v-if="dialog !== undefined"
-        class="fixed inset-0 z-[117] flex items-end justify-center bg-black/40 p-3 backdrop-blur-sm wide:items-center"
+        class="fixed inset-0 z-[117] flex items-end justify-center bg-fill-scrim p-3 backdrop-blur-sm wide:items-center"
         @click.self="dialog = undefined"
       >
         <div class="panel pop w-full max-w-sm p-4">
           <h3 class="mb-3 text-sm font-medium">{{ dialog.kind === 'create' ? '新建会话' : dialog.kind === 'rename' ? '重命名会话' : (dialog.archived ? '归档会话' : '取消归档') }}</h3>
           <template v-if="dialog.kind === 'create'">
             <ComboBox v-model="dialog.workspaceId" :items="workspaceOptions" placeholder="选择工作区" icon="layers" width="w-full" />
-            <p class="mt-4 mb-1.5 text-[11px] text-zinc-400">模式</p>
+            <p class="mt-4 mb-1.5 text-[11px] text-tertiary">模式</p>
             <div class="max-h-[46dvh] space-y-1 overflow-y-auto">
               <button
                 v-for="preset in state.presets"
                 :key="preset.id"
                 type="button"
                 class="flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left transition-colors"
-                :class="(dialog.presetId ?? state.presets[0]?.id) === preset.id ? 'bg-white/80 dark:bg-white/[0.12]' : 'hover:bg-white/60 dark:hover:bg-white/[0.08]'"
+                :class="(dialog.presetId ?? state.presets[0]?.id) === preset.id ? 'bg-fill-hover' : 'hover:bg-fill-tint-hover'"
                 @click="dialog.presetId = preset.id"
               >
                 <span class="min-w-0 flex-1">
                   <span class="block text-[13px] font-medium">{{ preset.name }}</span>
-                  <span v-if="preset.description" class="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">{{ preset.description }}</span>
+                  <span v-if="preset.description" class="mt-0.5 block text-[11px] leading-4 text-secondary">{{ preset.description }}</span>
                 </span>
-                <AppIcon v-if="(dialog.presetId ?? state.presets[0]?.id) === preset.id" name="check" :size="14" class="mt-0.5 shrink-0 text-blue-500" />
+                <AppIcon v-if="(dialog.presetId ?? state.presets[0]?.id) === preset.id" name="check" :size="14" class="mt-0.5 shrink-0 text-primary" />
               </button>
-              <p v-if="state.presets.length === 0" class="px-2 py-1 text-xs text-zinc-400">没有可用的模式</p>
+              <p v-if="state.presets.length === 0" class="px-2 py-1 text-xs text-tertiary">没有可用的模式</p>
             </div>
           </template>
           <input
@@ -631,7 +631,7 @@ function entriesFor (session) {
             @keydown.enter.prevent="commitDialog"
           />
           <template v-else>
-            <p v-if="dialog.archived" class="text-[13px] text-zinc-500 dark:text-zinc-400">
+            <p v-if="dialog.archived" class="text-[13px] text-secondary">
               归档后它会从列表移到「已归档」，随时可以取消归档。
             </p>
             <label v-if="dialog.archived" class="mt-3 flex items-center gap-2 text-[13px]">

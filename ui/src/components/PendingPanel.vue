@@ -30,14 +30,14 @@ import AppIcon from './AppIcon.vue'
     <div
       v-for="approval in state.pending.approvals"
       :key="approval.key"
-      class="card rise border-amber-300/70 bg-amber-50/70 p-3 dark:border-amber-400/30 dark:bg-amber-500/10"
+      class="card rise border-warning-on bg-warning-soft p-3 border-warning-on bg-warning-soft"
     >
-      <div class="flex items-center gap-2 text-[13px] font-medium text-amber-700 dark:text-amber-300">
+      <div class="flex items-center gap-2 text-[13px] font-medium text-warning-on text-warning-on">
         <AppIcon name="shield" :size="14" />
         等待确认：{{ approval.toolName }}
       </div>
       <p v-if="approval.reason" class="mt-1 text-[13px]">{{ approval.reason }}</p>
-      <p class="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+      <p class="mt-1 text-[11px] text-secondary">
         远程端只展示、不代答，请在桌面窗口确认。
       </p>
     </div>

@@ -127,8 +127,8 @@ watch(() => props.ticks.length, onLeave)
         <span
           class="rounded-full transition-all duration-75"
           :class="tick.index === hovered || tick.index === active
-            ? 'h-[3px] w-6 bg-zinc-500/80 dark:bg-zinc-200/85'
-            : 'h-[1.5px] w-[18px] bg-zinc-400/45 hover:bg-zinc-500/70 dark:bg-zinc-500/50 dark:hover:bg-zinc-300/80'"
+            ? 'h-[3px] w-6 text-tertiary bg-fill-strong'
+            : 'h-[1.5px] w-[18px] bg-fill-chip hover:bg-zinc-500/70 bg-fill-strong dark:hover:bg-zinc-300/80'"
         />
       </button>
     </div>
@@ -140,7 +140,7 @@ watch(() => props.ticks.length, onLeave)
       class="card pointer-events-none absolute right-full mr-2 w-72 p-2.5 transition-[top] duration-100 ease-out"
       :style="{ top: `${previewTop}px`, transform: 'translateY(-50%)' }"
     >
-      <div class="mb-1 flex items-center gap-1.5 text-[11px] text-zinc-400">
+      <div class="mb-1 flex items-center gap-1.5 text-[11px] text-tertiary">
         <AppIcon name="send" :size="11" />
         <span>{{ preview.label }}</span>
         <span v-if="preview.images > 0" class="ml-auto">🖼 {{ preview.images }}</span>
@@ -148,7 +148,7 @@ watch(() => props.ticks.length, onLeave)
       <p v-if="preview.preview !== ''" class="line-clamp-6 text-[12px] leading-relaxed whitespace-pre-wrap break-words">
         {{ preview.preview }}
       </p>
-      <p v-else class="text-[12px] text-zinc-400 italic">（仅图片）</p>
+      <p v-else class="text-[12px] text-tertiary italic">（仅图片）</p>
     </div>
   </div>
 </template>

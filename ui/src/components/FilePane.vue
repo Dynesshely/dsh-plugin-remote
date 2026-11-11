@@ -565,7 +565,7 @@ watch(() => state.selected, () => {
 </script>
 
 <template>
-  <div class="file-pane relative flex h-full min-h-0 flex-col" :class="fullscreen ? 'fixed inset-0 z-[135] bg-white/95 p-3 backdrop-blur-xl dark:bg-zinc-950/95' : ''">
+  <div class="file-pane relative flex h-full min-h-0 flex-col" :class="fullscreen ? 'fixed inset-0 z-[135] bg-white/95 p-3 backdrop-blur-xl bg-fill-solid' : ''">
     <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-2">
       <ComboBox
         :model-value="workspaceId"
@@ -586,7 +586,7 @@ watch(() => state.selected, () => {
       Icon-only actions. The panel is narrow, and eight labelled chips either wrap their text or push the
       list off screen — the tooltip carries the word instead.
     -->
-    <div class="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-white/50 px-1.5 pt-0.5 pb-2 dark:border-white/10">
+    <div class="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-outline-medium px-1.5 pt-0.5 pb-2 dark:border-white/10">
       <button class="icon-btn h-7 w-7" type="button" title="新建文件夹" aria-label="新建文件夹" :disabled="busy !== ''" @click="create('dir')">
         <AppIcon name="folder" :size="13" />
       </button>
@@ -622,21 +622,21 @@ watch(() => state.selected, () => {
       >
         <AppIcon name="file" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7 text-rose-500" type="button" title="删除" aria-label="删除" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
+      <button class="icon-btn h-7 w-7 text-danger" type="button" title="删除" aria-label="删除" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
         <AppIcon name="close" :size="13" />
       </button>
     </div>
-    <p v-if="clip !== undefined" class="shrink-0 truncate px-1.5 pb-1 text-[10px] text-zinc-400">
+    <p v-if="clip !== undefined" class="shrink-0 truncate px-1.5 pb-1 text-[10px] text-tertiary">
       {{ clip.mode === 'copy' ? '已复制' : '已剪切' }} {{ String(clip.items.length) }} 项
     </p>
 
-    <nav v-if="preview === undefined" class="flex shrink-0 flex-wrap items-center gap-0.5 px-1.5 pt-1.5 pb-1 text-[11px] text-zinc-400">
+    <nav v-if="preview === undefined" class="flex shrink-0 flex-wrap items-center gap-0.5 px-1.5 pt-1.5 pb-1 text-[11px] text-tertiary">
       <template v-for="(crumb, index) in crumbs" :key="crumb.path">
         <AppIcon v-if="index > 0" name="chevronRight" :size="10" class="shrink-0 opacity-60" />
         <button
           type="button"
           class="max-w-[7.5rem] truncate rounded px-1 py-0.5 hover:bg-white/60 dark:hover:bg-white/10"
-          :class="index === crumbs.length - 1 ? 'text-zinc-600 dark:text-zinc-200' : ''"
+          :class="index === crumbs.length - 1 ? 'text-muted text-strong' : ''"
           @click="open(crumb.path)"
         >
           {{ crumb.name }}
@@ -648,10 +648,10 @@ watch(() => state.selected, () => {
       <!-- preview -->
       <div v-if="preview !== undefined" class="flex h-full min-h-0 flex-col">
         <div class="mb-1.5 flex shrink-0 items-center gap-1.5">
-          <span class="min-w-0 flex-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400" :title="preview.path">
+          <span class="min-w-0 flex-1 truncate text-[11px] text-secondary" :title="preview.path">
             {{ preview.name }}
           </span>
-          <span class="shrink-0 text-[10px] text-zinc-400">{{ formatSize(preview.size) }}</span>
+          <span class="shrink-0 text-[10px] text-tertiary">{{ formatSize(preview.size) }}</span>
           <a class="icon-btn h-6 w-6" :href="rawUrl(preview.path)" download :title="'下载'">
             <AppIcon name="download" :size="12" />
           </a>
@@ -664,26 +664,26 @@ watch(() => state.selected, () => {
         </div>
 
         <div class="min-h-0 flex-1 overflow-auto">
-          <p v-if="preview.loading" class="px-1 py-3 text-[11px] text-zinc-400">正在载入预览…</p>
+          <p v-if="preview.loading" class="px-1 py-3 text-[11px] text-tertiary">正在载入预览…</p>
           <img v-else-if="preview.kind === 'image'" :src="preview.src" alt="" class="max-h-full w-full rounded-xl object-contain" />
           <video v-else-if="preview.kind === 'video'" :src="preview.src" controls class="max-h-full w-full rounded-xl" />
           <audio v-else-if="preview.kind === 'audio'" :src="preview.src" controls class="w-full" />
           <iframe
             v-else-if="preview.kind === 'pdf'"
             :src="preview.src"
-            class="h-full min-h-[60vh] w-full rounded-xl border border-white/50 dark:border-white/10"
+            class="h-full min-h-[60vh] w-full rounded-xl border border-outline-medium"
             title="PDF"
           />
           <!-- Code: a fixed-width gutter beside unwrapped text keeps the numbers aligned. -->
           <div v-else-if="preview.kind === 'code'" class="flex gap-2 font-mono text-[11px] leading-5">
-            <pre class="shrink-0 select-none text-right text-zinc-400">{{ Array.from({ length: preview.lines }, (_, index) => index + 1).join('\n') }}</pre>
+            <pre class="shrink-0 select-none text-right text-tertiary">{{ Array.from({ length: preview.lines }, (_, index) => index + 1).join('\n') }}</pre>
             <pre class="min-w-0 flex-1 overflow-x-auto" v-html="preview.html" />
           </div>
           <div v-else-if="preview.kind === 'html'" class="md break-words" :class="preview.name.endsWith('.md') || preview.name.endsWith('.markdown') ? '' : 'sheet-preview'" v-html="preview.html" />
-          <p v-else class="rounded-xl bg-white/40 p-2 text-[11px] text-zinc-400 dark:bg-white/5">
+          <p v-else class="rounded-xl bg-white/40 p-2 text-[11px] text-tertiary dark:bg-white/5">
             {{ preview.error ?? '无法预览这个文件，可以下载后查看。' }}
           </p>
-          <p v-if="preview.truncated" class="mt-1 text-[10px] text-zinc-400">内容较长，仅显示前面一部分。</p>
+          <p v-if="preview.truncated" class="mt-1 text-[10px] text-tertiary">内容较长，仅显示前面一部分。</p>
         </div>
       </div>
 
@@ -692,22 +692,22 @@ watch(() => state.selected, () => {
           <div v-for="index in 6" :key="index" class="rc-shimmer h-6" />
         </div>
         <div v-else-if="error !== ''" class="px-1 pt-2">
-          <p class="mb-2 text-[11px] text-rose-500">{{ error }}</p>
+          <p class="mb-2 text-[11px] text-danger">{{ error }}</p>
           <button class="chip" type="button" @click="open(path)">重试</button>
         </div>
-        <p v-else-if="(listing?.entries ?? []).length === 0" class="px-2 py-6 text-center text-[11px] text-zinc-400">
+        <p v-else-if="(listing?.entries ?? []).length === 0" class="px-2 py-6 text-center text-[11px] text-tertiary">
           这个目录是空的。
         </p>
         <!-- Selection summary, so multi-select is visible without counting highlighted rows. -->
-        <p v-if="hasSelection" class="px-1.5 pt-1 text-[10px] text-zinc-400">已选中 {{ selection.size }} 项</p>
+        <p v-if="hasSelection" class="px-1.5 pt-1 text-[10px] text-tertiary">已选中 {{ selection.size }} 项</p>
         <div v-else ref="listBox" class="relative">
           <ul class="space-y-0.5">
             <li v-for="entry in visibleEntries" :key="entry.name" class="file-row">
             <button
               type="button"
               :data-entry="entry.name"
-              class="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-white/60 dark:hover:bg-white/[0.08]"
-              :class="isSelected(entry) ? 'bg-blue-500/15 dark:bg-blue-400/20' : ''"
+              class="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-fill-tint-hover"
+              :class="isSelected(entry) ? 'bg-primary-container bg-primary-container' : ''"
               @click="tapRow(entry)"
               @dblclick="activate(entry)"
             >
@@ -715,10 +715,10 @@ watch(() => state.selected, () => {
                 :name="entry.kind === 'dir' ? 'folder' : 'file'"
                 :size="12"
                 class="shrink-0"
-                :class="entry.kind === 'dir' ? 'text-blue-500/80' : 'text-zinc-400'"
+                :class="entry.kind === 'dir' ? 'text-primary' : 'text-tertiary'"
               />
-              <span class="min-w-0 flex-1 truncate text-[12px] text-zinc-600 dark:text-zinc-300">{{ entry.name }}</span>
-              <span v-if="entry.kind === 'file'" class="shrink-0 text-[10px] text-zinc-400">{{ formatSize(entry.size) }}</span>
+              <span class="min-w-0 flex-1 truncate text-[12px] text-muted">{{ entry.name }}</span>
+              <span v-if="entry.kind === 'file'" class="shrink-0 text-[10px] text-tertiary">{{ formatSize(entry.size) }}</span>
             </button>
             </li>
           </ul>
@@ -735,11 +735,11 @@ watch(() => state.selected, () => {
 
           <div
             v-if="marqueeStyle !== undefined"
-            class="pointer-events-none absolute rounded border border-blue-500/70 bg-blue-500/15"
+            class="pointer-events-none absolute rounded border border-primary bg-primary-container"
             :style="marqueeStyle"
           />
         </div>
-        <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-amber-600 dark:text-amber-300">
+        <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on text-warning-on">
           条目过多，仅显示前面一部分。
         </p>
       </template>
@@ -748,12 +748,12 @@ watch(() => state.selected, () => {
     <!-- Dialogs live in the panel so they read as part of it, not as a browser prompt. -->
     <div
       v-if="ask !== undefined"
-      class="absolute inset-0 z-40 flex items-center justify-center bg-black/40 p-3 backdrop-blur-sm"
+      class="absolute inset-0 z-40 flex items-center justify-center bg-fill-scrim p-3 backdrop-blur-sm"
       @click.self="cancelAsk"
     >
       <div class="panel pop w-full max-w-[18rem] p-3">
-        <p class="mb-2 text-[13px] font-medium text-zinc-700 dark:text-zinc-200">{{ ask.title }}</p>
-        <p v-if="ask.mode === 'confirm'" class="mb-3 text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+        <p class="mb-2 text-[13px] font-medium text-strong">{{ ask.title }}</p>
+        <p v-if="ask.mode === 'confirm'" class="mb-3 text-[12px] leading-relaxed text-secondary">
           {{ ask.message }}
         </p>
         <input
@@ -770,7 +770,7 @@ watch(() => state.selected, () => {
           <button class="chip" type="button" @click="cancelAsk">取消</button>
           <button
             class="chip chip-strong"
-            :class="ask.mode === 'confirm' ? 'text-rose-500' : ''"
+            :class="ask.mode === 'confirm' ? 'text-danger' : ''"
             type="button"
             @click="submitAsk"
           >

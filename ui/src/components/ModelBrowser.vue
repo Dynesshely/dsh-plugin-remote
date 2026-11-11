@@ -129,8 +129,8 @@ onMounted(async () => {
       <div class="panel panel-veil pop flex max-h-[88dvh] w-full max-w-2xl flex-col p-4">
         <div class="mb-3 flex items-center gap-2">
           <h2 class="text-sm font-medium">所有模型</h2>
-          <span class="text-[11px] text-zinc-400">{{ matched.length }} 个</span>
-          <span v-if="metaSource === 'gateway'" class="rounded-full bg-white/60 px-1.5 text-[9px] text-zinc-500 dark:bg-white/10 dark:text-zinc-400">
+          <span class="text-[11px] text-tertiary">{{ matched.length }} 个</span>
+          <span v-if="metaSource === 'gateway'" class="rounded-full bg-fill-tint px-1.5 text-[9px] text-secondary">
             容量来自网关
           </span>
           <button class="icon-btn ml-auto h-7 w-7" type="button" title="关闭" @click="emit('close')">
@@ -150,8 +150,8 @@ onMounted(async () => {
             type="button"
             class="rounded-full px-2.5 py-1 text-[11px] transition-colors"
             :class="view === option.id
-              ? 'bg-blue-500 text-white hover:bg-blue-500'
-              : 'bg-white/60 text-zinc-500 hover:bg-white/80 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.16]'"
+              ? 'bg-primary text-on-primary hover:bg-primary'
+              : 'bg-fill-tint text-secondary hover:bg-white/80 text-muted dark:hover:bg-white/[0.16]'"
             @click="view = option.id"
           >
             {{ option.label }}
@@ -161,28 +161,28 @@ onMounted(async () => {
 
         <div class="min-h-0 flex-1 overflow-y-auto">
           <section v-for="[title, rows] in grouped" :key="title" class="mb-3">
-            <p class="mb-1 text-[11px] font-medium tracking-wide text-zinc-400">{{ title }}</p>
+            <p class="mb-1 text-[11px] font-medium tracking-wide text-tertiary">{{ title }}</p>
             <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
               <button
                 v-for="row in rows"
                 :key="row.id"
                 type="button"
-                class="flex items-start gap-2 rounded-xl border border-white/50 px-2 py-1.5 text-left transition-colors hover:bg-white/60 dark:border-white/10 dark:hover:bg-white/[0.08]"
-                :class="row.id === model ? 'ring-1 ring-blue-400' : ''"
+                class="flex items-start gap-2 rounded-xl border border-outline-medium px-2 py-1.5 text-left transition-colors hover:bg-white/60 dark:border-white/10 dark:hover:bg-white/[0.08]"
+                :class="row.id === model ? 'ring-1 ring-primary' : ''"
                 @click="emit('select', row.id)"
               >
                 <ModelMark v-if="row.mark" :mark="row.mark" :size="16" class="mt-0.5 opacity-90" />
                 <AppIcon v-else :name="row.icon" :size="16" class="mt-0.5 shrink-0 opacity-70" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
-                    <span class="truncate text-[12px] text-zinc-700 dark:text-zinc-100">{{ row.name }}</span>
-                    <AppIcon v-if="row.id === model" name="check" :size="12" class="shrink-0 text-blue-500" />
+                    <span class="truncate text-[12px] text-strong">{{ row.name }}</span>
+                    <AppIcon v-if="row.id === model" name="check" :size="12" class="shrink-0 text-primary" />
                   </span>
-                  <span class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-zinc-400">
-                    <span v-if="capacity(row.id) !== ''" class="rounded bg-white/60 px-1 dark:bg-white/10" :title="`上下文窗口 ${String(contextWindows[row.id])}`">
+                  <span class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-tertiary">
+                    <span v-if="capacity(row.id) !== ''" class="rounded bg-fill-tint px-1" :title="`上下文窗口 ${String(contextWindows[row.id])}`">
                       {{ capacity(row.id) }} 上下文
                     </span>
-                    <span v-if="thinking(row)" class="rounded bg-white/60 px-1 dark:bg-white/10" :title="`可调思考强度，默认 ${effort(row)}`">
+                    <span v-if="thinking(row)" class="rounded bg-fill-tint px-1" :title="`可调思考强度，默认 ${effort(row)}`">
                       思考 {{ effort(row) }}
                     </span>
                     <span class="truncate" :title="row.id">{{ row.id }}</span>
@@ -191,7 +191,7 @@ onMounted(async () => {
               </button>
             </div>
           </section>
-          <p v-if="grouped.length === 0" class="px-1 py-3 text-[12px] text-zinc-400">没有匹配的模型。</p>
+          <p v-if="grouped.length === 0" class="px-1 py-3 text-[12px] text-tertiary">没有匹配的模型。</p>
         </div>
       </div>
     </div>

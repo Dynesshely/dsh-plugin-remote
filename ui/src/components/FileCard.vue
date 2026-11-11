@@ -150,12 +150,12 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="rootEl"
-    class="rc-file-card my-1.5 flex max-w-xl items-center gap-2 rounded-xl border border-white/60 bg-white/55 px-2 py-1.5 dark:border-white/10 dark:bg-white/[0.06]"
+    class="rc-file-card my-1.5 flex max-w-xl items-center gap-2 rounded-xl border border-outline bg-white/55 px-2 py-1.5 dark:bg-white/[0.06]"
     data-file-card="1"
     :data-file-path="path"
   >
     <!-- 左：缩略图或类型图标 -->
-    <span class="rc-file-thumb relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white/70 text-zinc-500 dark:bg-white/10 dark:text-zinc-300">
+    <span class="rc-file-thumb relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white/70 text-secondary dark:bg-white/10 text-muted">
       <img
         v-if="isImage && !thumbnailFailed"
         :src="imageUrl"
@@ -171,8 +171,8 @@ onBeforeUnmount(() => {
 
     <!-- 中：文件名 + 说明 -->
     <button type="button" class="min-w-0 flex-1 text-left" :title="path" @click="preview">
-      <span class="block truncate text-[12.5px] font-medium text-zinc-700 dark:text-zinc-100">{{ name }}</span>
-      <span class="block truncate text-[11px] text-zinc-400 dark:text-zinc-500">{{ description }}</span>
+      <span class="block truncate text-[12.5px] font-medium text-strong">{{ name }}</span>
+      <span class="block truncate text-[11px] text-tertiary text-subtle">{{ description }}</span>
     </button>
 
     <!-- 右：主操作 + 下拉 -->
@@ -180,7 +180,7 @@ onBeforeUnmount(() => {
     <div class="relative shrink-0">
       <button
         type="button"
-        class="rc-file-more flex h-6 w-6 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+        class="rc-file-more flex h-6 w-6 items-center justify-center rounded-lg text-tertiary hover:text-zinc-600 dark:hover:text-zinc-200"
         aria-label="更多操作"
         :aria-expanded="menuOpen"
         data-file-menu-toggle="1"
@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
       </button>
       <div
         v-if="menuOpen"
-        class="rc-file-menu absolute right-0 top-full z-[150] mt-1 w-40 overflow-hidden rounded-xl border border-white/70 bg-white py-1 shadow-[0_12px_30px_-12px_rgb(15_23_42/0.5)] dark:border-white/15 dark:bg-zinc-900"
+        class="rc-file-menu absolute right-0 top-full z-[150] mt-1 w-40 overflow-hidden rounded-xl border border-outline-medium-strong bg-white py-1 shadow-[0_12px_30px_-12px_rgb(15_23_42/0.5)] dark:border-white/15 bg-fill-solid"
         role="menu"
         data-file-menu="1"
       >
@@ -215,17 +215,17 @@ onBeforeUnmount(() => {
         @pointerdown.self="closePreview"
       >
         <div
-          class="rc-file-dialog flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl dark:border-white/15 dark:bg-zinc-900"
+          class="rc-file-dialog flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-outline-medium-strong bg-white shadow-2xl dark:border-white/15 bg-fill-solid"
           role="dialog"
           aria-modal="true"
           :aria-label="name"
           data-file-preview="1"
         >
           <div class="flex items-center gap-2 px-3 py-2">
-            <AppIcon :name="icon" :size="13" class="shrink-0 text-zinc-400" />
+            <AppIcon :name="icon" :size="13" class="shrink-0 text-tertiary" />
             <div class="min-w-0 flex-1">
-              <p class="truncate text-[12px] font-medium text-zinc-700 dark:text-zinc-100">{{ name }}</p>
-              <p class="truncate text-[10px] text-zinc-400">{{ path }}</p>
+              <p class="truncate text-[12px] font-medium text-strong">{{ name }}</p>
+              <p class="truncate text-[10px] text-tertiary">{{ path }}</p>
             </div>
             <button type="button" class="rc-file-close" aria-label="关闭预览" @click="closePreview">✕</button>
           </div>
@@ -238,11 +238,11 @@ onBeforeUnmount(() => {
               @error="previewFailed = true"
             >
             <div v-else class="flex flex-col items-center gap-2 px-4 py-10 text-center">
-              <AppIcon :name="icon" :size="26" class="text-zinc-400" />
-              <p class="text-[12px] text-zinc-500 dark:text-zinc-300">
+              <AppIcon :name="icon" :size="26" class="text-tertiary" />
+              <p class="text-[12px] text-secondary-strong">
                 {{ isImage ? '图片加载失败' : '该类型暂不支持页面内预览' }}
               </p>
-              <p class="max-w-full truncate text-[11px] text-zinc-400">{{ path }}</p>
+              <p class="max-w-full truncate text-[11px] text-tertiary">{{ path }}</p>
               <div class="flex flex-wrap items-center justify-center gap-2 pt-1">
                 <button type="button" class="rc-file-primary" @click="revealInFileManager">用文件浏览器打开</button>
                 <button type="button" class="rc-file-ghost" @click="copyPath">{{ copied ? '已复制路径' : '复制路径' }}</button>

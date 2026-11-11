@@ -82,8 +82,8 @@ function closeTab (key) {
     <!-- Picker: what this column can show, before committing to one. -->
     <template v-if="picking">
       <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-2">
-        <AppIcon name="sidebar" :size="13" class="shrink-0 text-zinc-400" />
-        <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-600 dark:text-zinc-300">可用容器</span>
+        <AppIcon name="sidebar" :size="13" class="shrink-0 text-tertiary" />
+        <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">可用容器</span>
         <button class="icon-btn h-7 w-7 shrink-0" type="button" title="关闭" @click="emit('close')">
           <AppIcon name="close" :size="13" />
         </button>
@@ -93,13 +93,13 @@ function closeTab (key) {
           v-for="entry in CONTAINERS"
           :key="entry.id"
           type="button"
-          class="flex w-full items-start gap-2 rounded-xl border border-white/50 px-2 py-2 text-left transition-colors hover:bg-white/60 dark:border-white/10 dark:hover:bg-white/[0.08]"
+          class="flex w-full items-start gap-2 rounded-xl border border-outline-medium px-2 py-2 text-left transition-colors hover:bg-white/60 dark:border-white/10 dark:hover:bg-white/[0.08]"
           @click="choose(entry.id)"
         >
-          <AppIcon :name="entry.icon" :size="14" class="mt-0.5 shrink-0 text-blue-500/80" />
+          <AppIcon :name="entry.icon" :size="14" class="mt-0.5 shrink-0 text-primary" />
           <span class="min-w-0 flex-1">
-            <span class="block truncate text-[12px] text-zinc-700 dark:text-zinc-200">{{ entry.name }}</span>
-            <span class="mt-0.5 block text-[10px] leading-relaxed text-zinc-400">{{ entry.detail }}</span>
+            <span class="block truncate text-[12px] text-strong">{{ entry.name }}</span>
+            <span class="mt-0.5 block text-[10px] leading-relaxed text-tertiary">{{ entry.detail }}</span>
           </span>
           <AppIcon name="chevronRight" :size="11" class="mt-1 shrink-0 opacity-50" />
         </button>
@@ -116,8 +116,8 @@ function closeTab (key) {
               :key="tab.key"
               class="flex shrink-0 items-center rounded-full transition-colors"
               :class="active === tab.key
-                ? 'bg-blue-500 text-white'
-                : 'bg-white/60 text-zinc-500 dark:bg-white/10 dark:text-zinc-300'"
+                ? 'bg-primary text-white'
+                : 'bg-fill-tint text-secondary-strong'"
             >
               <button
                 type="button"

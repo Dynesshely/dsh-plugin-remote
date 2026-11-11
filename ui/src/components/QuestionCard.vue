@@ -136,19 +136,19 @@ function onKeydown (event) {
   <div class="card overflow-hidden" @keydown="onKeydown">
     <header class="flex items-start justify-between gap-4 px-4 pt-4">
       <div class="min-w-0">
-        <p class="mb-1 text-[11px] leading-4 text-zinc-400">
+        <p class="mb-1 text-[11px] leading-4 text-tertiary">
           {{ eyebrow }}<span v-if="elsewhere" class="ml-1 opacity-70">（其它会话）</span>
         </p>
         <h3 class="text-[16px] leading-[22px] font-medium">
           {{ current?.header ?? current?.question ?? '' }}
         </h3>
-        <p v-if="current?.header && current?.question" class="mt-1 text-[13px] text-zinc-500 dark:text-zinc-400">
+        <p v-if="current?.header && current?.question" class="mt-1 text-[13px] text-secondary">
           {{ current.question }}
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-1">
-        <span v-if="readOnly" class="text-[12px] leading-6 whitespace-nowrap text-zinc-400">已作答</span>
-        <span v-else class="text-[12px] leading-6 whitespace-nowrap text-zinc-400">
+        <span v-if="readOnly" class="text-[12px] leading-6 whitespace-nowrap text-tertiary">已作答</span>
+        <span v-else class="text-[12px] leading-6 whitespace-nowrap text-tertiary">
           {{ busy ? '提交中…' : '等待你的回答' }}
         </span>
       </div>
@@ -167,7 +167,7 @@ function onKeydown (event) {
           type="button"
           class="flex w-full shrink-0 items-start gap-2 rounded-xl border px-2 py-2 pr-3 text-left transition-colors"
           :class="isPicked(current, option.label)
-            ? 'border-sky-400/60 bg-white/70 dark:border-sky-400/40 dark:bg-white/[0.10]'
+            ? 'border-primary bg-white/70 border-primary dark:bg-white/[0.10]'
             : 'border-transparent hover:bg-white/50 dark:hover:bg-white/[0.07]'"
           :role="current.multiSelect ? 'checkbox' : 'radio'"
           :aria-checked="isPicked(current, option.label)"
@@ -176,15 +176,15 @@ function onKeydown (event) {
         >
           <span
             v-if="current.multiSelect"
-            class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border border-zinc-300/80 dark:border-white/20"
-            :class="isPicked(current, option.label) ? 'border-sky-400 bg-sky-500/90 text-white' : ''"
+            class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border border-outline dark:border-white/20"
+            :class="isPicked(current, option.label) ? 'border-primary bg-primary text-white' : ''"
             aria-hidden="true"
           >
             <AppIcon v-if="isPicked(current, option.label)" name="check" :size="12" />
           </span>
           <span
             v-else
-            class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-zinc-900/[0.06] text-[12px] leading-[18px] font-medium text-zinc-500 dark:bg-white/10 dark:text-zinc-400"
+            class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md bg-fill-muted text-[12px] leading-[18px] font-medium text-secondary dark:bg-white/10 text-secondary"
             aria-hidden="true"
           >
             {{ optionIndex + 1 }}
@@ -194,7 +194,7 @@ function onKeydown (event) {
               <span class="text-[13px] leading-5">{{ option.label }}</span>
               <span v-if="option.recommended" class="chip px-1.5 py-0 text-[10px] leading-4">推荐</span>
             </span>
-            <span v-if="option.description" class="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
+            <span v-if="option.description" class="mt-0.5 block text-[11px] leading-4 text-secondary">
               {{ option.description }}
             </span>
           </span>
@@ -205,7 +205,7 @@ function onKeydown (event) {
           v-if="!readOnly"
           class="mt-1 flex items-center gap-2 rounded-xl border border-transparent px-2 py-1.5 hover:bg-white/40 dark:hover:bg-white/[0.05]"
         >
-          <AppIcon name="pencil" :size="13" class="shrink-0 text-zinc-400" />
+          <AppIcon name="pencil" :size="13" class="shrink-0 text-tertiary" />
           <input
             :value="draftOf(current.id).custom"
             type="text"
@@ -215,18 +215,18 @@ function onKeydown (event) {
           />
         </label>
         <p v-else-if="customOf(current)" class="mt-1 flex items-start gap-2 px-2 py-1.5 text-[13px]">
-          <AppIcon name="pencil" :size="13" class="mt-0.5 shrink-0 text-zinc-400" />
+          <AppIcon name="pencil" :size="13" class="mt-0.5 shrink-0 text-tertiary" />
           <span>{{ customOf(current) }}</span>
         </p>
       </div>
     </div>
 
     <footer class="mt-2 flex shrink-0 items-center justify-end gap-3 px-4 pb-3">
-      <p v-if="error" class="mr-auto text-[12px] text-rose-500">{{ error }}</p>
+      <p v-if="error" class="mr-auto text-[12px] text-danger">{{ error }}</p>
       <div v-if="model.length > 1" class="flex items-center gap-1.5">
         <button
           type="button"
-          class="grid h-6 w-6 place-items-center rounded-full text-zinc-400 transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
+          class="grid h-6 w-6 place-items-center rounded-full text-tertiary transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
           :disabled="index === 0"
           title="上一个问题"
           @click="index -= 1"
@@ -238,7 +238,7 @@ function onKeydown (event) {
         </span>
         <button
           type="button"
-          class="grid h-6 w-6 place-items-center rounded-full text-zinc-400 transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
+          class="grid h-6 w-6 place-items-center rounded-full text-tertiary transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
           :disabled="index >= model.length - 1"
           title="下一个问题"
           @click="index += 1"

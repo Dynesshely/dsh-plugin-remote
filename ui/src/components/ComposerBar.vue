@@ -298,7 +298,7 @@ function chooseFromBrowser (modelId) {
 
 <template>
   <div class="px-2 pt-2" style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px))">
-    <div v-if="state.actionError" class="mb-1.5 px-1 text-[12px] text-rose-500">{{ state.actionError }}</div>
+    <div v-if="state.actionError" class="mb-1.5 px-1 text-[12px] text-danger">{{ state.actionError }}</div>
 
     <!-- Slightly tighter corners than the other panels (18px instead of 24px). -->
     <!-- No `overflow-hidden` here: the model/permission comboboxes open upwards out of the card.
@@ -306,12 +306,12 @@ function chooseFromBrowser (modelId) {
     <div class="glass rounded-[18px]" @paste="onPaste">
       <div
         v-if="attachments.length > 0 || staging > 0"
-        class="flex items-center gap-2 overflow-x-auto border-b border-white/50 px-3 py-2 dark:border-white/10"
+        class="flex items-center gap-2 overflow-x-auto border-b border-outline-medium px-3 py-2 dark:border-white/10"
       >
         <div
           v-for="(attachment, index) in attachments"
           :key="attachment.uploadId"
-          class="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/60 dark:border-white/10"
+          class="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-outline"
         >
           <!-- 预览是 blob: URL（零拷贝），不再把整张图的 base64 塞进 <img src>。 -->
           <button type="button" class="h-full w-full" title="预览" data-zoom="1">
@@ -327,7 +327,7 @@ function chooseFromBrowser (modelId) {
           </button>
         </div>
         <!-- 处理中就说出来：解码/压缩/上传期间不显示任何提示，读者会以为卡死了。 -->
-        <span v-if="staging > 0" class="shrink-0 px-1 text-[11px] text-zinc-400">
+        <span v-if="staging > 0" class="shrink-0 px-1 text-[11px] text-tertiary">
           正在处理图片…
         </span>
       </div>
@@ -433,12 +433,12 @@ function chooseFromBrowser (modelId) {
     <Teleport to="body">
       <div
         v-if="settingsOpen"
-        class="fixed inset-0 z-[110] flex items-end justify-center bg-black/40 p-3 backdrop-blur-sm wide:items-center"
+        class="fixed inset-0 z-[110] flex items-end justify-center bg-fill-scrim p-3 backdrop-blur-sm wide:items-center"
         @click.self="settingsOpen = false"
       >
         <div class="panel pop flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden">
-          <header class="flex shrink-0 items-center gap-2 border-b border-white/50 px-3 py-2.5 dark:border-white/10">
-            <AppIcon name="gear" :size="15" class="text-zinc-400" />
+          <header class="flex shrink-0 items-center gap-2 border-b border-outline-medium px-3 py-2.5 dark:border-white/10">
+            <AppIcon name="gear" :size="15" class="text-tertiary" />
             <span class="flex-1 text-sm font-medium">模型与权限</span>
             <button class="icon-btn h-7 w-7" type="button" @click="settingsOpen = false">
               <AppIcon name="close" :size="13" />
@@ -448,28 +448,28 @@ function chooseFromBrowser (modelId) {
                so a long model catalog can never push it out of reach. -->
           <div class="min-h-0 flex-1 overflow-y-auto p-3">
             <section>
-              <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400 uppercase">模型</h3>
+              <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">模型</h3>
               <div class="space-y-1">
                 <button
                   v-for="item in modelItems"
                   :key="item.value"
                   type="button"
                   class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors"
-                  :class="item.value === currentModel ? 'bg-white/80 dark:bg-white/[0.12]' : 'hover:bg-white/60 dark:hover:bg-white/[0.08]'"
+                  :class="item.value === currentModel ? 'bg-fill-hover' : 'hover:bg-fill-tint-hover'"
                   @click="chooseModel(item.value)"
                 >
                   <span class="min-w-0 flex-1">
                     <span class="block truncate text-[13px]">{{ item.name }}</span>
-                    <span class="block truncate text-[11px] text-zinc-500 dark:text-zinc-400">{{ item.description }}</span>
+                    <span class="block truncate text-[11px] text-secondary">{{ item.description }}</span>
                   </span>
-                  <AppIcon v-if="item.value === currentModel" name="check" :size="14" class="text-blue-500" />
+                  <AppIcon v-if="item.value === currentModel" name="check" :size="14" class="text-primary" />
                 </button>
-                <p v-if="modelItems.length === 0" class="px-2 py-1 text-xs text-zinc-400">模型目录不可用</p>
+                <p v-if="modelItems.length === 0" class="px-2 py-1 text-xs text-tertiary">模型目录不可用</p>
               </div>
             </section>
           </div>
-          <section class="shrink-0 border-t border-white/50 bg-white/30 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-            <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400 uppercase">权限预设</h3>
+          <section class="shrink-0 border-t border-outline-medium bg-white/30 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">权限预设</h3>
             <div class="flex flex-wrap gap-1.5">
               <button
                 v-for="item in permissionItems"
@@ -483,7 +483,7 @@ function chooseFromBrowser (modelId) {
                 <AppIcon v-if="item.value === state.permissions.current" name="check" :size="12" />
                 {{ item.name }}
               </button>
-              <span v-if="permissionItems.length === 0" class="text-xs text-zinc-400">权限目录不可用</span>
+              <span v-if="permissionItems.length === 0" class="text-xs text-tertiary">权限目录不可用</span>
             </div>
           </section>
         </div>
@@ -494,12 +494,12 @@ function chooseFromBrowser (modelId) {
     <Teleport to="body">
       <div
         v-if="infoOpen"
-        class="fixed inset-0 z-[110] flex items-end justify-center bg-black/40 p-3 backdrop-blur-sm wide:items-center"
+        class="fixed inset-0 z-[110] flex items-end justify-center bg-fill-scrim p-3 backdrop-blur-sm wide:items-center"
         @click.self="infoOpen = false"
       >
         <div class="panel pop flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden">
-          <header class="flex shrink-0 items-center gap-2 border-b border-white/50 px-3 py-2.5 dark:border-white/10">
-            <AppIcon name="info" :size="15" class="text-zinc-400" />
+          <header class="flex shrink-0 items-center gap-2 border-b border-outline-medium px-3 py-2.5 dark:border-white/10">
+            <AppIcon name="info" :size="15" class="text-tertiary" />
             <span class="flex-1 text-sm font-medium">状态详情</span>
             <button class="icon-btn h-7 w-7" type="button" @click="infoOpen = false">
               <AppIcon name="close" :size="13" />
@@ -511,7 +511,7 @@ function chooseFromBrowser (modelId) {
             </div>
             <dl class="space-y-1.5 text-[13px]">
               <div v-for="row in infoRows" :key="row[0]" class="flex items-baseline gap-3">
-                <dt class="w-24 shrink-0 text-zinc-400">{{ row[0] }}</dt>
+                <dt class="w-24 shrink-0 text-tertiary">{{ row[0] }}</dt>
                 <dd class="min-w-0 flex-1 break-all">{{ row[1] }}</dd>
               </div>
             </dl>

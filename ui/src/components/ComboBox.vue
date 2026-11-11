@@ -269,7 +269,7 @@ watch(open, (value) => {
         v-if="open"
         ref="list"
         role="listbox"
-        class="card pop fixed z-[120] flex flex-col overflow-hidden p-1.5"
+        class="card pop fixed z-[130] flex flex-col overflow-hidden p-1.5"
         :style="{
           left: `${position.left}px`,
           width: `${position.width}px`,
@@ -296,7 +296,7 @@ watch(open, (value) => {
                  options below need no provider subtitle of their own. -->
             <p
               v-if="section.title !== ''"
-              class="rc-combo-group px-2.5 pt-2 pb-1 text-[11px] font-medium tracking-wide text-zinc-400 first:pt-0.5"
+              class="rc-combo-group px-2.5 pt-2 pb-1 text-[11px] font-medium tracking-wide text-tertiary first:pt-0.5"
             >
               {{ section.title }}
             </p>
@@ -309,8 +309,8 @@ watch(open, (value) => {
               :data-active="option.index === active"
               class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors"
               :class="option.index === active
-                ? 'bg-white/80 dark:bg-white/[0.12]'
-                : 'hover:bg-white/60 dark:hover:bg-white/[0.08]'"
+                ? 'bg-fill-hover'
+                : 'hover:bg-fill-tint-hover'"
               @pointerenter="active = option.index; startScroll($event)"
               @pointerleave="stopScroll"
               @click="choose(option.item)"
@@ -319,14 +319,14 @@ watch(open, (value) => {
               <AppIcon v-else-if="option.item.icon" :name="option.item.icon" :size="14" class="shrink-0 opacity-70" />
               <span class="min-w-0 flex-1 overflow-hidden">
                 <span class="rc-marquee text-[13px]">{{ option.item.name }}</span>
-                <span v-if="section.title === '' && option.item.description" class="block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                <span v-if="section.title === '' && option.item.description" class="block truncate text-[11px] text-secondary">
                   {{ option.item.description }}
                 </span>
               </span>
-              <AppIcon v-if="option.item.value === model" name="check" :size="14" class="shrink-0 text-blue-500" />
+              <AppIcon v-if="option.item.value === model" name="check" :size="14" class="shrink-0 text-primary" />
             </button>
           </template>
-          <p v-if="filtered.length === 0" class="px-2.5 py-2 text-xs text-zinc-400">
+          <p v-if="filtered.length === 0" class="px-2.5 py-2 text-xs text-tertiary">
             {{ searchable && query.trim() !== '' ? '没有匹配的模型' : '暂无选项' }}
           </p>
         </div>
@@ -335,8 +335,8 @@ watch(open, (value) => {
         <button
           v-if="allLabel !== ''"
           type="button"
-          class="mx-1 mt-2 mb-1 flex shrink-0 items-center gap-2 rounded-xl border border-white/50 px-2.5 py-2 text-left text-[12px] text-zinc-600 transition-colors hover:bg-white/70 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.1]"
-          @click="$emit('view-all')"
+          class="mx-1 mt-2 mb-1 flex shrink-0 items-center gap-2 rounded-xl border border-outline-medium px-2.5 py-2 text-left text-[12px] text-muted transition-colors hover:bg-white/70 dark:border-white/10 dark:hover:bg-white/[0.1]"
+          @click="open = false; $emit('view-all')"
         >
           <AppIcon name="more" :size="13" class="shrink-0 opacity-70" />
           <span class="min-w-0 flex-1 truncate">{{ allLabel }}</span>

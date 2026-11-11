@@ -144,8 +144,12 @@ watch(settingsOpen, (open) => {
   }
 })
 
-const props = defineProps({ theme: { type: String, default: 'system' } })
-const emit = defineEmits(['toggleSidebar', 'toggleFiles', 'update:theme'])
+const props = defineProps({
+  theme: { type: String, default: 'system' },
+  /** 皮肤：`glass`（液态玻璃）/ `md3`。真正生效靠 `<html data-skin>`，这里只负责选择与显示。 */
+  skin: { type: String, default: 'glass' },
+})
+const emit = defineEmits(['toggleSidebar', 'toggleFiles', 'update:theme', 'update:skin'])
 
 const scroller = ref(null)
 
@@ -227,6 +231,12 @@ const THEMES = [
   { value: 'system', name: '跟随系统', icon: 'monitor' },
   { value: 'light', name: '浅色', icon: 'sun' },
   { value: 'dark', name: '深色', icon: 'moon' },
+]
+
+/** 皮肤选择：与主题并排放在设置的「外观」区。 */
+const SKINS = [
+  { value: 'glass', name: '液态玻璃', icon: 'layers' },
+  { value: 'md3', name: 'Material Design 3', icon: 'layers' },
 ]
 
 /** One rail tick per user prompt. */
@@ -689,7 +699,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="flex h-full min-h-0 flex-col">
-    <header class="z-10 m-2 mb-0 flex items-center gap-2 rounded-[18px] border border-white/50 bg-white/25 px-2.5 py-2 dark:border-white/10 dark:bg-white/[0.03]">
+    <header class="z-10 m-2 mb-0 flex items-center gap-2 rounded-[18px] border border-outline-medium bg-white/25 px-2.5 py-2 dark:border-white/10 dark:bg-white/[0.03]">
       <button class="icon-btn" type="button" title="展开/收起侧栏" @click="emit('toggleSidebar')">
         <AppIcon name="menu" :size="16" />
       </button>
@@ -697,12 +707,12 @@ onBeforeUnmount(() => {
            composer no longer repeats it — it only gains the word while a turn is actually running. -->
       <span
         class="flex shrink-0 items-center gap-1.5"
-        :class="state.telemetry.running ? 'text-emerald-600 dark:text-emerald-400' : ''"
+        :class="state.telemetry.running ? 'text-success-on text-success-on' : ''"
         :title="state.telemetry.running ? '正在运行' : '空闲'"
       >
         <span
           class="h-2 w-2 shrink-0 rounded-full"
-          :class="state.telemetry.running ? 'bg-emerald-500 pulse' : 'bg-zinc-300 dark:bg-zinc-600'"
+          :class="state.telemetry.running ? 'bg-success pulse' : 'bg-fill-strong bg-fill-strong'"
         />
         <span v-if="state.telemetry.running" class="text-[11px] font-medium">运行中</span>
       </span>
@@ -733,7 +743,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="settingsOpen"
-        class="fixed inset-0 z-[126] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+        class="fixed inset-0 z-[126] flex items-center justify-center bg-fill-scrim p-4 backdrop-blur-sm"
         @click.self="settingsOpen = false"
       >
         <div class="panel pop max-h-[80dvh] w-full max-w-md overflow-y-auto p-4">
@@ -744,7 +754,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">外观</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">外观</p>
           <div class="mb-3 flex items-center justify-between gap-3">
             <span class="text-[13px]">主题</span>
             <ComboBox
@@ -756,6 +766,17 @@ onBeforeUnmount(() => {
               @update:model-value="emit('update:theme', $event)"
             />
           </div>
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <span class="text-[13px]">皮肤</span>
+            <ComboBox
+              :model-value="skin"
+              :items="SKINS"
+              icon="layers"
+              align="right"
+              width="max-w-[9rem]"
+              @update:model-value="emit('update:skin', $event)"
+            />
+          </div>
           <label class="mb-3 flex items-center justify-between gap-3 text-[13px]">
             <span>紧凑消息间距</span>
             <input v-model="dense" type="checkbox" class="h-3.5 w-3.5" />
@@ -763,7 +784,7 @@ onBeforeUnmount(() => {
           <label class="mb-3 flex items-start justify-between gap-3 text-[13px]">
             <span class="min-w-0">
               省流模式
-              <span class="mt-0.5 block text-[11px] text-zinc-400">不加载图片附件，并关闭毛玻璃与动效，适合弱网</span>
+              <span class="mt-0.5 block text-[11px] text-tertiary">不加载图片附件，并关闭毛玻璃与动效，适合弱网</span>
             </span>
             <input
               :checked="state.lightweight"
@@ -773,8 +794,8 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">连接</p>
-          <dl class="mb-3 space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">连接</p>
+          <dl class="mb-3 space-y-1 text-[12px] text-secondary">
             <div class="flex justify-between gap-3">
               <dt>监听</dt>
               <dd class="truncate">{{ state.bind || '—' }}</dd>
@@ -789,15 +810,15 @@ onBeforeUnmount(() => {
             </div>
           </dl>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">用量与余额</p>
-          <p class="mb-2 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">用量与余额</p>
+          <p class="mb-2 text-[11px] leading-relaxed text-secondary">
             由宿主代为请求（浏览器受同源策略限制），密钥只存在宿主侧（<code class="font-mono">~/.dsh/remote-control/usage.json</code>，权限 0600），页面只会看到掩码。
           </p>
-          <div class="mb-2 rounded-xl border border-sky-300/50 bg-sky-50/40 p-2 dark:border-sky-400/20 dark:bg-sky-500/[0.06]">
+          <div class="mb-2 rounded-xl border border-primary bg-primary-container p-2 border-primary bg-primary-container">
             <div class="mb-1.5 flex items-center gap-2">
               <input v-model="usageGateway.enabled" type="checkbox" class="h-3.5 w-3.5" />
               <span class="text-[13px]">网关聚合（推荐）</span>
-              <span class="ml-auto text-[10px] text-zinc-400">
+              <span class="ml-auto text-[10px] text-tertiary">
                 {{ usageGateway.resolvedFrom === 'dsh' ? '密钥取自 DSH 凭据 ' + usageGateway.resolvedHint
                   : usageGateway.resolvedFrom === 'config' ? '密钥来自此处设置'
                     : '未找到密钥' }}
@@ -810,16 +831,16 @@ onBeforeUnmount(() => {
               class="field py-1 text-[12px]"
               placeholder="留空则使用 DSH 中 PORTARA_AI_GATEWAY_API_KEY"
             />
-            <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            <p class="mt-1.5 text-[10px] leading-relaxed text-secondary">
               网关会代查各家余额与用量，并把它代理过的模型的实际用量一并汇总，因此这里只需一个地址。
             </p>
           </div>
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">直连（网关关闭时使用）</p>
-          <div v-for="provider in usageDraft" :key="provider.id" class="mb-2 rounded-xl border border-white/50 p-2 dark:border-white/10">
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">直连（网关关闭时使用）</p>
+          <div v-for="provider in usageDraft" :key="provider.id" class="mb-2 rounded-xl border border-outline-medium p-2 dark:border-white/10">
             <div class="mb-1.5 flex items-center gap-2">
               <input v-model="provider.enabled" type="checkbox" class="h-3.5 w-3.5" />
               <span class="text-[13px]">{{ provider.label }}</span>
-              <span class="ml-auto text-[10px] text-zinc-400">
+              <span class="ml-auto text-[10px] text-tertiary">
                 {{ provider.hasKey ? `已存密钥 ${provider.hint}` : '未设置密钥' }}
               </span>
             </div>
@@ -835,16 +856,16 @@ onBeforeUnmount(() => {
             <button class="btn" type="button" :disabled="usageSaving" @click="saveUsageConfig">
               {{ usageSaving ? '保存中…' : '保存用量设置' }}
             </button>
-            <span v-if="usageSaved !== ''" class="text-[11px] text-emerald-600 dark:text-emerald-400">{{ usageSaved }}</span>
+            <span v-if="usageSaved !== ''" class="text-[11px] text-success-on text-success-on">{{ usageSaved }}</span>
           </div>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">DSH</p>
-          <p class="mb-3 text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">DSH</p>
+          <p class="mb-3 text-[12px] leading-relaxed text-secondary">
             重启与退出在左侧 DSH 菜单里（点击侧栏顶部的图标）。它们由一个独立进程完成，因为退出会连同本页面所依赖的宿主一起结束。
           </p>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-zinc-400">关于</p>
-          <p class="text-[12px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">关于</p>
+          <p class="text-[12px] leading-relaxed text-secondary">
             远程遥控插件 v1.0.0 · 页面与宿主同源、由令牌保护。更多设置项待定，这里先放上已经可用的部分。
           </p>
         </div>
@@ -853,7 +874,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="state.streamError"
-      class="mx-2 mt-2 flex items-center gap-2 rounded-xl border border-amber-300/60 bg-amber-100/70 px-3 py-1 text-[12px] text-amber-800 backdrop-blur-xl dark:border-amber-400/30 dark:bg-amber-500/15 dark:text-amber-200"
+      class="mx-2 mt-2 flex items-center gap-2 rounded-xl border border-warning-on bg-warning-soft px-3 py-1 text-[12px] text-warning-on backdrop-blur-xl border-warning-on bg-warning-soft text-warning-on"
     >
       <span class="min-w-0 flex-1">{{ state.streamError }}</span>
       <button class="shrink-0 underline" type="button" @click="retrySession">重试</button>
@@ -870,8 +891,8 @@ onBeforeUnmount(() => {
         <div
           class="pointer-events-auto flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] shadow-lg backdrop-blur-xl"
           :class="state.snapshotProgress.done
-            ? 'border-emerald-300/70 bg-emerald-100/90 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/20 dark:text-emerald-200'
-            : 'border-white/60 bg-white/85 text-zinc-600 dark:border-white/15 dark:bg-zinc-900/85 dark:text-zinc-200'"
+            ? 'border-success-on bg-success-soft text-success-on border-success-on bg-success-soft text-success-on'
+            : 'border-outline bg-white/85 text-muted dark:border-white/15 bg-fill-strong text-strong'"
         >
           <AppIcon v-if="state.snapshotProgress.done" name="check" :size="13" class="shrink-0" />
           <AppIcon v-else name="refresh" :size="13" class="shrink-0 animate-spin" />
@@ -881,7 +902,7 @@ onBeforeUnmount(() => {
             class="relative h-1 w-16 shrink-0 overflow-hidden rounded-full bg-black/10 dark:bg-white/15"
           >
             <span
-              class="absolute inset-y-0 left-0 rounded-full bg-blue-500 transition-all duration-300"
+              class="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-300"
               :style="{ width: snapshotPercent + '%' }"
             />
           </span>
@@ -909,7 +930,7 @@ onBeforeUnmount(() => {
               <!-- A slow link should not trap the reader in a request they cannot stop. -->
               <button v-if="state.loadingOlder" class="chip" type="button" @click="cancelOlder">取消</button>
             </div>
-            <p v-if="state.olderError !== ''" class="text-[12px] text-rose-500">
+            <p v-if="state.olderError !== ''" class="text-[12px] text-danger">
               {{ state.olderError }}
               <button class="ml-1 underline" type="button" @click="loadEarlier">重试</button>
             </p>
@@ -922,7 +943,7 @@ onBeforeUnmount(() => {
             aria-busy="true"
             aria-live="polite"
           >
-            <p class="flex items-center gap-2 text-[12px] text-zinc-400">
+            <p class="flex items-center gap-2 text-[12px] text-tertiary">
               <AppIcon name="refresh" :size="12" class="animate-spin" />
               <span>{{ sessionHint === '' ? '正在载入会话…' : sessionHint }}</span>
             </p>
@@ -944,18 +965,18 @@ onBeforeUnmount(() => {
             v-else-if="canRetry(sessionPhase) && transcriptItems.length === 0"
             class="flex flex-col items-center gap-3 py-16 text-center"
           >
-            <p class="text-sm text-amber-600 dark:text-amber-300">{{ sessionHint }}</p>
+            <p class="text-sm text-warning-on text-warning-on">{{ sessionHint }}</p>
             <button class="btn btn-primary" type="button" @click="retrySession">重试</button>
           </div>
           <p
             v-else-if="transcriptItems.length === 0 && state.events.length > 0 && !state.live.text"
-            class="px-6 py-16 text-center text-sm text-amber-600 dark:text-amber-300"
+            class="px-6 py-16 text-center text-sm text-warning-on text-warning-on"
           >
             已载入 {{ state.events.length }} 条事件，但没有可显示的内容（可能是解析异常）。
           </p>
           <p
             v-else-if="transcriptItems.length === 0 && !state.live.text"
-            class="py-16 text-center text-sm text-zinc-400"
+            class="py-16 text-center text-sm text-tertiary"
           >
             {{ state.selected === undefined ? '从左侧选择一个会话' : '这个会话还没有消息' }}
           </p>
@@ -982,11 +1003,11 @@ onBeforeUnmount(() => {
                 v-if="showLiveReasoning"
                 class="card pop mt-2 border-dashed px-3 py-2"
               >
-                <div class="md break-words text-[13px] text-zinc-500 dark:text-zinc-400" v-html="liveReasoningHtml" />
+                <div class="md break-words text-[13px] text-secondary" v-html="liveReasoningHtml" />
               </div>
             </div>
             <div class="md break-words" v-html="liveHtml" />
-            <span class="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-blue-500 align-middle" />
+            <span class="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-primary align-middle" />
           </div>
         </div>
       </div>
