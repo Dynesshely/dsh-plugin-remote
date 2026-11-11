@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../lib/api.js'
 import { codeHtml } from '../lib/highlight.js'
 import { renderMarkdown } from '../lib/markdown.js'
@@ -7,6 +7,16 @@ import { mobileLayout as mobile } from '../lib/layout.js'
 import { state } from '../lib/store.js'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
+
+/**
+ * The name shown above the panel's own controls.
+ *
+ * Passed in rather than hard-coded: the tab strip already knows what this tab hosts, and two different names
+ * for one panel is how the header and the tab drift apart.
+ */
+const props = defineProps({
+  title: { type: String, default: '文件资源管理器' },
+})
 
 /**
  * Workspace file manager.
@@ -77,16 +87,156 @@ const sessionWorkspace = computed(() => {
   return String(session?.workspaceId ?? '')
 })
 
-/** @returns the breadcrumb segments, root first. */
+/** The absolute directory of the workspace being browsed. */
+const workspaceRoot = computed(() => {
+  const found = (state.workspaces ?? []).find((entry) => String(entry.id) === workspaceId.value)
+  return String(found?.path ?? '').replace(/\\/gu, '/')
+})
+
+/** Separators normalised, trailing slash dropped: absolute paths are compared, not displayed. */
+function normalisePath (value) {
+  return String(value ?? '').replace(/\\/gu, '/').replace(/\/+$/u, '')
+}
+
+/**
+ * @returns every path segment from the drive down to the current directory, each flagged with the workspace
+ * it belongs to and the workspace-relative path to open.
+ *
+ * A breadcrumb that starts at the workspace root hides where the files actually live, and the file manager is
+ * the one place in this app where knowing the real directory matters. So the trail starts at the drive letter:
+ * segments above the workspace are shown for orientation and are only clickable when another workspace covers
+ * them, while segments at or below the root open a relative path as usual.
+ */
 const crumbs = computed(() => {
-  const trail = [{ name: listing.value?.root?.name ?? '工作区', path: '' }]
+  const root = workspaceRoot.value
+  const relative = normalisePath(path.value)
+  if (root === '') {
+    // No workspace path known: fall back to the relative trail, still showing every segment.
+    const trail = [{ name: listing.value?.root?.name ?? '工作区', path: '', absolute: '', inside: true }]
+    let accumulated = ''
+    for (const segment of relative.split('/').filter((part) => part !== '')) {
+      accumulated = accumulated === '' ? segment : `${accumulated}/${segment}`
+      trail.push({ name: segment, path: accumulated, absolute: accumulated, inside: true })
+    }
+    return trail
+  }
+  const rootSegments = root.split('/').filter((part) => part !== '')
+  const trail = []
   let accumulated = ''
-  for (const segment of String(path.value).split('/').filter((part) => part !== '')) {
+  for (const segment of rootSegments) {
     accumulated = accumulated === '' ? segment : `${accumulated}/${segment}`
-    trail.push({ name: segment, path: accumulated })
+    trail.push({
+      name: segment,
+      path: '',
+      absolute: accumulated,
+      inside: accumulated.length >= root.length,
+    })
+  }
+  let relativePath = ''
+  for (const segment of relative.split('/').filter((part) => part !== '')) {
+    relativePath = relativePath === '' ? segment : `${relativePath}/${segment}`
+    trail.push({ name: segment, path: relativePath, absolute: `${root}/${relativePath}`, inside: true })
   }
   return trail
 })
+
+/** The full absolute path of what the list is showing, for the editable field and for copying. */
+const absolutePath = computed(() => {
+  const root = workspaceRoot.value
+  const relative = normalisePath(path.value)
+  if (root === '') return relative
+  return relative === '' ? root : `${root}/${relative}`
+})
+
+/** The editor element, focused when the row switches into text mode. */
+const pathInput = ref(null)
+
+/** True while the path is being edited as text instead of shown as a breadcrumb. */
+const editingPath = ref(false)
+/** The draft in the editor, seeded from the current absolute path. */
+const pathDraft = ref('')
+
+/** Switch the breadcrumb into a text field holding the absolute path. */
+async function beginPathEdit () {
+  pathDraft.value = absolutePath.value
+  editingPath.value = true
+  // Select the whole value: replacing a directory name should not require deleting the old one first.
+  await nextTick()
+  pathInput.value?.focus()
+  pathInput.value?.select()
+}
+
+/**
+ * Resolve an absolute (or workspace-relative) path to a workspace plus a relative path.
+ * @param value - what the user typed.
+ * @returns the target, or undefined when no workspace contains it.
+ *
+ * The file API only speaks `workspaceId + relative path`, so a typed absolute path is matched against the
+ * workspaces the client already has: the deepest workspace that contains it wins, and anything above every
+ * workspace is refused rather than guessed at.
+ */
+function resolvePath (value) {
+  const typed = normalisePath(value.trim())
+  if (typed === '') return { workspaceId: workspaceId.value, relative: '' }
+  let best
+  for (const workspace of state.workspaces ?? []) {
+    const root = normalisePath(workspace.path)
+    if (root === '') continue
+    if (typed !== root && !typed.startsWith(`${root}/`)) continue
+    if (best === undefined || root.length > best.root.length) {
+      best = { workspaceId: String(workspace.id), root, relative: typed.slice(root.length).replace(/^\//u, '') }
+    }
+  }
+  if (best !== undefined) return { workspaceId: best.workspaceId, relative: best.relative }
+  // A relative path is still useful: it means "inside the workspace I am already showing".
+  if (!/^[A-Za-z]:/u.test(typed) && !typed.startsWith('/')) {
+    return { workspaceId: workspaceId.value, relative: typed }
+  }
+  return undefined
+}
+
+/** Apply the typed path, or explain why it cannot be reached. */
+async function commitPathEdit () {
+  // Enter hides the field, which fires blur, which would land here again. The first call owns the commit.
+  if (!editingPath.value) return
+  const target = resolvePath(pathDraft.value)
+  editingPath.value = false
+  if (target === undefined) {
+    error.value = `无法定位：${pathDraft.value} 不在任何工作区内`
+    return
+  }
+  error.value = ''
+  if (target.workspaceId !== workspaceId.value) {
+    workspaceId.value = target.workspaceId
+  }
+  await open(target.relative)
+}
+
+/** Abandon the edit without touching the listing. */
+function cancelPathEdit () {
+  // Mark it handled first: hiding the field fires blur, and that must not turn a cancel into a commit.
+  editingPath.value = false
+}
+
+/**
+ * Follow one breadcrumb segment.
+ * @param crumb - the segment.
+ *
+ * Segments at or below the workspace open a relative path. A segment above the workspace is only followed when
+ * another workspace starts exactly there, so a click never lands outside what the file API can serve.
+ */
+async function openCrumb (crumb) {
+  if (crumb.inside) {
+    await open(crumb.path)
+    return
+  }
+  const match = (state.workspaces ?? []).find(
+    (workspace) => normalisePath(workspace.path) === normalisePath(crumb.absolute),
+  )
+  if (match === undefined) return
+  workspaceId.value = String(match.id)
+  await open('')
+}
 
 /** @returns a size in the shortest readable form. */
 function formatSize (bytes) {
@@ -119,7 +269,8 @@ const selectedEntries = computed(() => (listing.value?.entries ?? []).filter((en
  */
 function tapRow (entry) {
   selectOnly(entry)
-  // A phone has no double click: there a single tap opens, which is what the gesture means on touch.
+  // Phones have no double click, so a tap has to open. With a pointer, opening is the double click and a
+  // single click is selection only — otherwise the first click of a double click would already navigate.
   if (mobile.value) void activate(entry)
 }
 
@@ -132,6 +283,60 @@ function entryPath (entry) {
 function rawUrl (target) {
   const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
   return `/api/files/raw?${query.toString()}`
+}
+
+/** Visited locations, oldest first, with the cursor pointing at the one on screen. */
+const history = ref([])
+const historyIndex = ref(-1)
+/** True while stepping through history, so the resulting `open` does not push a new entry. */
+let historyLock = false
+
+/** Remember where the listing landed, unless it is already the current entry. */
+function recordHistory () {
+  if (historyLock) return
+  const snapshot = { workspaceId: workspaceId.value, path: path.value }
+  const current = history.value[historyIndex.value]
+  if (current !== undefined && current.workspaceId === snapshot.workspaceId && current.path === snapshot.path) return
+  // Going somewhere new discards the forward branch, which is what a browser does too.
+  history.value = [...history.value.slice(0, historyIndex.value + 1), snapshot]
+  historyIndex.value = history.value.length - 1
+}
+
+const canGoBack = computed(() => historyIndex.value > 0)
+const canGoForward = computed(() => historyIndex.value < history.value.length - 1)
+/** The host reports `parent` only when the directory has one above it. */
+const canGoUp = computed(() => listing.value?.parent !== undefined)
+
+/**
+ * Step to one entry in the history.
+ * @param index - the entry to show.
+ */
+async function goToHistory (index) {
+  const target = history.value[index]
+  if (target === undefined) return
+  historyLock = true
+  historyIndex.value = index
+  try {
+    if (target.workspaceId !== workspaceId.value) workspaceId.value = target.workspaceId
+    await open(target.path)
+  } finally {
+    historyLock = false
+  }
+}
+
+function goBack () {
+  if (canGoBack.value) void goToHistory(historyIndex.value - 1)
+}
+
+function goForward () {
+  if (canGoForward.value) void goToHistory(historyIndex.value + 1)
+}
+
+/** Go to the parent directory. This is a real navigation, so it is recorded like any other. */
+async function goUp () {
+  const parent = listing.value?.parent
+  if (parent === undefined) return
+  await open(parent)
 }
 
 /** Load one directory. */
@@ -147,6 +352,7 @@ async function open (target) {
     // 目录出现这一帧只挂首批行，剩下的分帧补：500 行一次性 patch 是一段 40ms 的同步长任务。
     rowLimit.value = Math.min(listing.value?.entries?.length ?? 0, ROW_FIRST_BATCH)
     scheduleRowGrow()
+    recordHistory()
   } catch (problem) {
     error.value = String(problem.message ?? problem)
   } finally {
@@ -566,14 +772,9 @@ watch(() => state.selected, () => {
 
 <template>
   <div class="file-pane relative flex h-full min-h-0 flex-col" :class="fullscreen ? 'fixed inset-0 z-[135] bg-white/95 p-3 backdrop-blur-xl bg-fill-solid' : ''">
-    <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-2">
-      <ComboBox
-        :model-value="workspaceId"
-        :items="workspaces"
-        icon="layers"
-        width="min-w-0 flex-1"
-        @update:model-value="switchWorkspace"
-      />
+    <!-- Title line: the panel's name and its own two actions. -->
+    <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-1">
+      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">{{ title }}</span>
       <button class="icon-btn h-7 w-7 shrink-0" type="button" title="回到当前会话的工作区" @click="jumpToSession">
         <AppIcon name="pin" :size="13" />
       </button>
@@ -583,10 +784,21 @@ watch(() => state.selected, () => {
     </header>
 
     <!--
-      Icon-only actions. The panel is narrow, and eight labelled chips either wrap their text or push the
-      list off screen — the tooltip carries the word instead.
+      Workspace selector and the eight actions share one row: three that create content, a divider, then
+      five that act on the selection. The selector yields width first, so the buttons never shrink or wrap.
     -->
-    <div class="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-outline-medium px-1.5 pt-0.5 pb-2 dark:border-white/10">
+    <div class="flex shrink-0 items-center gap-1.5 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
+      <div class="min-w-0 flex-1">
+        <ComboBox
+          :model-value="workspaceId"
+          :items="workspaces"
+          icon="layers"
+          width="w-full"
+          class="w-full"
+          @update:model-value="switchWorkspace"
+        />
+      </div>
+      <!-- Icon-only: the panel is narrow, and labelled chips would push the selector off the row. -->
       <button class="icon-btn h-7 w-7" type="button" title="新建文件夹" aria-label="新建文件夹" :disabled="busy !== ''" @click="create('dir')">
         <AppIcon name="folder" :size="13" />
       </button>
@@ -602,7 +814,7 @@ watch(() => state.selected, () => {
         <AppIcon name="paperclip" :size="13" />
         <input type="file" multiple class="hidden" :disabled="busy !== ''" @change="upload($event.target)" />
       </label>
-      <span class="mx-0.5 h-4 w-px shrink-0 bg-black/10 dark:bg-white/15" />
+      <span class="mx-0.5 h-4 w-px shrink-0 bg-outline-variant" />
       <button class="icon-btn h-7 w-7" type="button" title="重命名" aria-label="重命名" :disabled="busy !== '' || selection.size !== 1" @click="renameSelected">
         <AppIcon name="pencil" :size="13" />
       </button>
@@ -623,26 +835,108 @@ watch(() => state.selected, () => {
         <AppIcon name="file" :size="13" />
       </button>
       <button class="icon-btn h-7 w-7 text-danger" type="button" title="删除" aria-label="删除" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
-        <AppIcon name="close" :size="13" />
+        <AppIcon name="trash" :size="13" />
       </button>
+    </div>
+
+    <!--
+      Path row: a breadcrumb and a path field for the same value.
+
+      The breadcrumb is for reading and stepping; the field is for jumping, pasting a path from elsewhere, or
+      reading the full location without hovering. Both always show the absolute path, because this panel is
+      the one place in the app where the real directory — not the workspace-relative one — is the thing the
+      reader is trying to find out.
+    -->
+    <!--
+      Path row: one bordered field, full width.
+
+      The frame belongs to the row rather than to a separate edit button: the whole bar is the affordance, so
+      clicking any blank part of it starts editing — the same thing the pointer already looks like it should do
+      in a location bar. A breadcrumb segment still navigates on its own click and never starts an edit.
+    -->
+    <div
+      v-if="preview === undefined"
+      class="file-path-row flex shrink-0 items-center gap-0.5 px-1.5 pt-1.5 pb-1"
+      @click.self="beginPathEdit"
+    >
+      <!-- Navigation sits on the same line as the path, at its leading edge. -->
+      <div class="flex shrink-0 items-center gap-0.5">
+        <button
+          class="icon-btn h-7 w-7 shrink-0"
+          type="button"
+          title="上一级目录"
+          aria-label="上一级目录"
+          :disabled="!canGoUp"
+          @click="goUp"
+        >
+          <AppIcon name="arrowUp" :size="13" />
+        </button>
+        <button
+          class="icon-btn h-7 w-7 shrink-0"
+          type="button"
+          title="返回"
+          aria-label="返回"
+          :disabled="!canGoBack"
+          @click="goBack"
+        >
+          <AppIcon name="arrowLeft" :size="13" />
+        </button>
+        <button
+          class="icon-btn h-7 w-7 shrink-0"
+          type="button"
+          title="前进"
+          aria-label="前进"
+          :disabled="!canGoForward"
+          @click="goForward"
+        >
+          <AppIcon name="arrowRight" :size="13" />
+        </button>
+      </div>
+      <div
+        class="file-path-frame ml-1 flex min-w-0 flex-1 items-center gap-1"
+        @click.self="beginPathEdit"
+      >
+        <nav
+          v-if="!editingPath"
+          class="file-crumbs flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-[11px] text-tertiary"
+          @click.self="beginPathEdit"
+        >
+          <template v-for="(crumb, index) in crumbs" :key="crumb.absolute === '' ? 'root' : crumb.absolute">
+            <AppIcon v-if="index > 0" name="chevronRight" :size="10" class="shrink-0 opacity-60" />
+            <button
+              type="button"
+              class="file-crumb max-w-[9rem] shrink-0 truncate rounded px-1 py-0.5 transition-colors"
+              :class="[
+                index === crumbs.length - 1 ? 'file-crumb-current' : '',
+                crumb.inside ? '' : 'file-crumb-outside',
+              ]"
+              :title="crumb.absolute"
+              @click.stop="openCrumb(crumb)"
+            >
+              {{ crumb.name }}
+            </button>
+          </template>
+          <!-- Trailing blank area of the same field: a place to click without landing on a segment. -->
+          <span class="min-w-2 flex-1 self-stretch" @click="beginPathEdit" />
+        </nav>
+        <input
+          v-else
+          ref="pathInput"
+          v-model="pathDraft"
+          class="h-6 min-w-0 flex-1 border-0 bg-transparent px-1 font-mono text-[11px] text-strong outline-none"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="输入绝对路径后回车"
+          @keydown.enter.prevent="commitPathEdit"
+          @keydown.esc.prevent="cancelPathEdit"
+          @blur="cancelPathEdit"
+        />
+      </div>
     </div>
     <p v-if="clip !== undefined" class="shrink-0 truncate px-1.5 pb-1 text-[10px] text-tertiary">
       {{ clip.mode === 'copy' ? '已复制' : '已剪切' }} {{ String(clip.items.length) }} 项
     </p>
 
-    <nav v-if="preview === undefined" class="flex shrink-0 flex-wrap items-center gap-0.5 px-1.5 pt-1.5 pb-1 text-[11px] text-tertiary">
-      <template v-for="(crumb, index) in crumbs" :key="crumb.path">
-        <AppIcon v-if="index > 0" name="chevronRight" :size="10" class="shrink-0 opacity-60" />
-        <button
-          type="button"
-          class="max-w-[7.5rem] truncate rounded px-1 py-0.5 hover:bg-white/60 dark:hover:bg-white/10"
-          :class="index === crumbs.length - 1 ? 'text-muted text-strong' : ''"
-          @click="open(crumb.path)"
-        >
-          {{ crumb.name }}
-        </button>
-      </template>
-    </nav>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
       <!-- preview -->
@@ -699,15 +993,17 @@ watch(() => state.selected, () => {
           这个目录是空的。
         </p>
         <!-- Selection summary, so multi-select is visible without counting highlighted rows. -->
-        <p v-if="hasSelection" class="px-1.5 pt-1 text-[10px] text-tertiary">已选中 {{ selection.size }} 项</p>
-        <div v-else ref="listBox" class="relative">
+        <p v-if="hasSelection" class="shrink-0 px-1.5 pt-1 pb-0.5 text-[10px] text-tertiary">
+          已选中 {{ selection.size }} 项
+        </p>
+        <div ref="listBox" class="relative">
           <ul class="space-y-0.5">
             <li v-for="entry in visibleEntries" :key="entry.name" class="file-row">
             <button
               type="button"
               :data-entry="entry.name"
-              class="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-fill-tint-hover"
-              :class="isSelected(entry) ? 'bg-primary-container bg-primary-container' : ''"
+              class="file-row-button flex w-full items-center gap-1.5 px-1.5 py-1 text-left transition-colors"
+              :class="isSelected(entry) ? 'is-selected' : ''"
               @click="tapRow(entry)"
               @dblclick="activate(entry)"
             >
@@ -739,7 +1035,7 @@ watch(() => state.selected, () => {
             :style="marqueeStyle"
           />
         </div>
-        <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on text-warning-on">
+        <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on">
           条目过多，仅显示前面一部分。
         </p>
       </template>

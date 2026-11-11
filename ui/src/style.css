@@ -1872,3 +1872,116 @@ body {
   pointer-events: none;
 }
 
+/* File rows: hover must be visible.
+
+   The row is a button with `transition-colors hover:bg-fill-chip`, but rows are wrapped in a list item that
+   carries `content-visibility: auto` for scrolling cost, and the rounded hover fill was being clipped by it.
+   Painting the fill on the row with the same radius makes every row respond the moment the pointer is over it,
+   which is the behaviour a file list is expected to have. */
+.file-pane .file-row-button {
+  border-radius: var(--radius-rc-sm);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.file-pane .file-row-button:hover {
+  background: var(--fill-chip);
+}
+
+.file-pane .file-row-button:active {
+  background: var(--fill-hover);
+}
+
+/* The selected row wins over hover, so a click that selects does not look like it merely hovered. */
+.file-pane .file-row-button.is-selected,
+.file-pane .file-row-button.is-selected:hover {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+}
+
+/* File action row: one line, always.
+
+   The column is narrow, so `flex-wrap` turned the eight controls into two ragged rows of circles. They now
+   scroll horizontally instead of wrapping, stay at 28px, and the separator between create/upload and the
+   selection actions is drawn by a class rather than a bare span that could end a line. */
+.file-actions {
+  scrollbar-width: none;
+}
+
+.file-actions::-webkit-scrollbar {
+  display: none;
+}
+
+.file-actions > * {
+  flex: 0 0 auto;
+}
+
+/* Breadcrumb row: one line that scrolls rather than wraps, so the trailing folder stays reachable. */
+.file-crumbs {
+  scrollbar-width: none;
+}
+
+.file-crumbs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Breadcrumb segments.
+
+   The trail now starts at the drive letter, so it is longer than before and most of its segments are outside
+   the workspace. Those cannot be opened — the file API has no route above a workspace root — so they are drawn
+   quieter and are not clickable, which keeps "where I am" readable without promising navigation that would
+   fail. The segment that is the current directory is emphasised so the end of a long path is obvious. */
+.file-crumb {
+  color: var(--text-subtle);
+}
+
+.file-crumb:hover {
+  background: var(--fill-chip);
+  color: var(--text-strong);
+}
+
+.file-crumb-current {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.file-crumb-outside {
+  color: var(--text-tertiary);
+  cursor: default;
+  opacity: 0.75;
+}
+
+.file-crumb-outside:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+/* The path bar is framed as one field.
+
+   The border lives on the frame, not on an edit button, so the whole bar reads as a location input — which is
+   what it becomes when clicked. Borrowing the token colours keeps it identical in both skins; the height is
+   the same as the buttons on the action row above so the column has one rhythm. */
+.file-path-frame {
+  min-height: 1.75rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-rc-sm);
+  background: var(--fill-muted);
+  cursor: text;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.file-path-frame:hover {
+  border-color: var(--outline);
+  background: var(--fill-chip);
+}
+
+/* While editing, the frame carries the focus ring instead of the inner input. */
+.file-path-frame:focus-within {
+  border-color: var(--primary);
+  background: var(--surface-1);
+}
+
+/* The crumbs inside must not draw their own box: the frame is the box. */
+.file-path-frame .file-crumb {
+  cursor: pointer;
+}

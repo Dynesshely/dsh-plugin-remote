@@ -40,6 +40,9 @@ const props = defineProps({
   minListWidth: { type: Number, default: 208 },
 })
 
+// The root renders `$attrs.class` itself, so Vue must not also apply the fallthrough.
+defineOptions({ inheritAttrs: false })
+
 const GAP = 8
 const EDGE = 8
 
@@ -240,7 +243,9 @@ watch(open, (value) => {
 </script>
 
 <template>
-  <div class="relative">
+  <!-- The root carries the caller's width classes: a wrapper div stays content-sized in a flex row, which left
+       a visible gap whenever the trigger was told to grow. -->
+  <div class="relative" :class="$attrs.class ?? ''">
     <button
       ref="trigger"
       type="button"
