@@ -17,6 +17,447 @@
   --ease-spring: cubic-bezier(0.22, 1.4, 0.36, 1);
 }
 
+/* ================================================================ 皮肤令牌（阶段 A）
+ *
+ * 这一层只定义语义令牌，**不替换组件里的颜色类**（那是阶段 B）。默认皮肤（玻璃 · 浅色）的每个值
+ * 都是从现有 CSS / 组件类**反推**的，所以「本轮不改任何视觉」是有依据的：
+ *
+ *   --surface-0  #f4f4f5              body: bg-zinc-100
+ *   --surface-1  rgb(255 255 255/.6)  .card / .panel / .panel-tight / .prompt-glass: bg-white/60
+ *   --surface-2  rgb(255 255 255/.9)  .panel-solid: bg-white/90；.rc-combo-group: rgb(255 255 255/.9)
+ *   --surface-3  rgb(255 255 255/.4)  .glass-soft / .usage-tile: bg-white/40
+ *   --on-surface #18181b              body: text-zinc-900
+ *   --on-surface-variant #52525b      .chip / .control: text-zinc-600
+ *   --on-surface-faint   #a1a1aa      text-zinc-400
+ *   --primary    #2563eb              .btn-primary 渐变落点 / 阴影 rgb(37 99 235)
+ *   --primary-container #eff6ff       .chip-strong: bg-blue-50/70 的底色
+ *   --outline    rgb(255 255 255/.6)  border-white/60
+ *   --outline-variant rgb(255 255 255/.5) border-white/50
+ *   --glass-blur 40px                 backdrop-blur-2xl
+ *   --shadow-1 / --shadow-2           见 .card 与 .rc-combo-group 的阴影
+ *
+ * 圆角令牌带 `rc-` 前缀：Tailwind v4 自己的 `--radius-sm/-md/-lg/-xl` 也在 :root 上，直接同名覆盖会
+ * 让 `rounded-sm` 等工具类全局变值 —— 那才是真正的视觉改动。
+ */
+:root,
+[data-skin='glass'] {
+  --outline-medium: rgb(255 255 255 / 0.5);
+  --text-secondary-strong: oklch(0.552 0.016 285.938);
+  --fill-tint-hover: rgb(255 255 255 / 0.6);
+  --text-muted-strong: oklch(0.442 0.017 285.786);
+  --outline-medium-strong: rgb(255 255 255 / 0.7);
+  --fill-muted-soft: rgb(24 24 27 / 0.06);
+  --fill-solid: #ffffff;
+  --fill-scrim: rgb(0 0 0 / 0.4);
+  --fill-scrim-soft: rgb(0 0 0 / 0.1);
+  color-scheme: light;
+
+  /* 表面层次 */
+  --surface-0: #f4f4f5;
+  --surface-1: rgb(255 255 255 / 0.6);
+  --surface-2: rgb(255 255 255 / 0.9);
+  --surface-3: rgb(255 255 255 / 0.4);
+
+  /* 文字 */
+  --on-surface: #18181b;
+  --on-surface-variant: #52525b;
+  --on-surface-faint: #a1a1aa;
+
+  /* 交互 */
+  --primary: #2563eb;
+  --on-primary: #ffffff;
+  --primary-container: #eff6ff;
+  --on-primary-container: #1d4ed8;
+
+  /* 描边（玻璃皮肤的"描边"是白色高光环） */
+  --outline: rgb(255 255 255 / 0.6);
+  --outline-variant: rgb(255 255 255 / 0.5);
+
+  /* 语义色 */
+  --danger: #e11d48;
+  --danger-container: #ffe4e6;
+  --success: #059669;
+  --success-container: #d1fae5;
+  --danger-on: #be123c;
+  --warning-on: #b45309;
+  --success-on: #047857;
+  --danger-soft: rgb(244 63 94 / 0.15);
+  --warning-soft: rgb(251 191 36 / 0.18);
+  --success-soft: rgb(16 185 129 / 0.16);
+  --warning: #d97706;
+  --warning-container: #fef3c7;
+
+  /* 玻璃专用 */
+  --glass-blur: 40px;
+  --glass-alpha: 0.6;
+  --glass-ring: rgb(255 255 255 / 0.6);
+
+  /* 形状（玻璃 10 / 12 / 16 / 18px） */
+  --radius-rc-sm: 10px;
+  --radius-rc-md: 12px;
+  --radius-rc-lg: 16px;
+  --radius-rc-xl: 18px;
+
+  /* 层次 */
+  --shadow-1: 0 8px 30px -12px rgb(15 23 42 / 0.18);
+  --shadow-2: 0 8px 16px -14px rgb(15 23 42 / 0.55);
+  --shadow-3: 0 1px 3px rgb(15 23 42 / 0.1), 0 1px 1px rgb(15 23 42 / 0.06);
+}
+
+[data-skin='glass'].dark {
+  --outline-medium: rgb(255 255 255 / 0.1);
+  --text-secondary-strong: oklch(0.871 0.006 286.286);
+  --fill-tint-hover: rgb(255 255 255 / 0.08);
+  --text-muted-strong: oklch(0.885 0.006 286.286);
+  --outline-medium-strong: rgb(255 255 255 / 0.15);
+  --fill-muted-soft: rgb(255 255 255 / 0.1);
+  --fill-solid: #18181b;
+  --fill-scrim: rgb(0 0 0 / 0.45);
+  --fill-scrim-soft: rgb(0 0 0 / 0.25);
+  color-scheme: dark;
+
+  --surface-0: #07080c;
+  --surface-1: rgb(255 255 255 / 0.06);
+  --surface-2: rgb(14 18 24 / 0.94);
+  --surface-3: rgb(255 255 255 / 0.04);
+
+  --on-surface: #f4f4f5;
+  --on-surface-variant: #d4d4d8;
+  --on-surface-faint: #71717a;
+
+  --primary: #3b82f6;
+  --on-primary: #ffffff;
+  --primary-container: rgb(37 99 235 / 0.15);
+  --on-primary-container: #bfdbfe;
+
+  --outline: rgb(255 255 255 / 0.1);
+  --outline-variant: rgb(255 255 255 / 0.08);
+
+  --danger: #fb7185;
+  --danger-container: #4c0519;
+  --success: #34d399;
+  --success-container: #064e3b;
+  --danger-on: #fda4af;
+  --warning-on: #fcd34d;
+  --success-on: #6ee7b7;
+  --danger-soft: rgb(251 113 133 / 0.2);
+  --warning-soft: rgb(251 191 36 / 0.18);
+  --success-soft: rgb(52 211 153 / 0.18);
+  --warning: #fbbf24;
+  --warning-container: #78350f;
+
+  --glass-blur: 40px;
+  --glass-alpha: 0.06;
+  --glass-ring: rgb(255 255 255 / 0.1);
+
+  --shadow-1: 0 10px 40px -16px rgb(0 0 0 / 0.7);
+  --shadow-2: 0 8px 16px -14px rgb(0 0 0 / 0.8);
+  --shadow-3: 0 1px 3px rgb(0 0 0 / 0.4), 0 1px 1px rgb(0 0 0 / 0.3);
+}
+
+/* ---------------------------------------------------------------- MD3 · 浅色 */
+[data-skin='md3'] {
+  --danger-on: #B3261E;
+  --warning-on: #7A5900;
+  --success-on: #146C2E;
+  --danger-soft: #FFDAD6;
+  --warning-soft: #FFDEA6;
+  --success-soft: #C4EED0;
+
+  --outline-medium: #CAC4D0;
+  --text-secondary-strong: #49454F;
+  --fill-tint-hover: #F3EDF7;
+  --text-muted-strong: #49454F;
+  --outline-medium-strong: #CAC4D0;
+  --fill-muted-soft: #F3EDF7;
+  --fill-solid: #F3EDF7;
+  --fill-scrim: rgb(0 0 0 / 0.32);
+  --fill-scrim-soft: rgb(0 0 0 / 0.16);
+  color-scheme: light;
+
+  --surface-0: #fffbff;
+  --surface-1: #f3edf7;
+  --surface-2: #ece6f0;
+  --surface-3: #e6e0e9;
+
+  --on-surface: #1d1b20;
+  --on-surface-variant: #49454f;
+  --on-surface-faint: #79747e;
+
+  --primary: #4d6bfe;
+  --on-primary: #ffffff;
+  --primary-container: #dee1ff;
+  --on-primary-container: #00105c;
+
+  --outline: #79747e;
+  --outline-variant: #cac4d0;
+
+  --danger: #b3261e;
+  --danger-container: #f9dedc;
+  --success: #146c2e;
+  --success-container: #c8e6c9;
+  --warning: #7a5900;
+  --warning-container: #ffdea6;
+
+  /* MD3 禁用一切毛玻璃：不透明 tonal surface 代替 */
+  --glass-blur: 0px;
+  --glass-alpha: 1;
+  --glass-ring: transparent;
+
+  /* 形状：MD3 的 8 / 12 / 16 / 28 */
+  --radius-rc-sm: 8px;
+  --radius-rc-md: 12px;
+  --radius-rc-lg: 16px;
+  --radius-rc-xl: 28px;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px 1px rgb(0 0 0 / 0.15);
+  --shadow-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 6px 2px rgb(0 0 0 / 0.15);
+  --shadow-3: 0 1px 3px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
+}
+
+/* ---------------------------------------------------------------- MD3 · 深色 */
+[data-skin='md3'].dark {
+  --danger-on: #F2B8B5;
+  --warning-on: #F0C048;
+  --success-on: #8FD9A8;
+  --danger-soft: #5C1A16;
+  --warning-soft: #4A3800;
+  --success-soft: #10331C;
+
+  --outline-medium: #49454F;
+  --text-secondary-strong: #CAC4D0;
+  --fill-tint-hover: #211F26;
+  --text-muted-strong: #CAC4D0;
+  --outline-medium-strong: #49454F;
+  --fill-muted-soft: #211F26;
+  --fill-solid: #211F26;
+  --fill-scrim: rgb(0 0 0 / 0.5);
+  --fill-scrim-soft: rgb(0 0 0 / 0.32);
+  color-scheme: dark;
+
+  --surface-0: #141218;
+  --surface-1: #211f26;
+  --surface-2: #2b2930;
+  --surface-3: #36343b;
+
+  --on-surface: #e6e0e9;
+  --on-surface-variant: #cac4d0;
+  --on-surface-faint: #938f99;
+
+  --primary: #b9c3ff;
+  --on-primary: #14246b;
+  --primary-container: #2f47c8;
+  --on-primary-container: #dee1ff;
+
+  --outline: #938f99;
+  --outline-variant: #49454f;
+
+  --danger: #f2b8b5;
+  --danger-container: #8c1d18;
+  --success: #6dd58c;
+  --success-container: #0a3818;
+  --warning: #ffb95c;
+  --warning-container: #5c3b00;
+
+  --glass-blur: 0px;
+  --glass-alpha: 1;
+  --glass-ring: transparent;
+
+  --radius-rc-sm: 8px;
+  --radius-rc-md: 12px;
+  --radius-rc-lg: 16px;
+  --radius-rc-xl: 28px;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5), 0 1px 3px 1px rgb(0 0 0 / 0.3);
+  --shadow-2: 0 1px 2px rgb(0 0 0 / 0.5), 0 2px 6px 2px rgb(0 0 0 / 0.3);
+  --shadow-3: 0 1px 3px rgb(0 0 0 / 0.45), 0 1px 1px rgb(0 0 0 / 0.3);
+}
+
+/*
+ * 把令牌暴露成 Tailwind 工具类（`bg-surface-1`、`text-on-surface`、`border-outline`…）。
+ * `inline` 让工具类直接引用上面的 CSS 变量 —— 皮肤切换时无需重建任何类名。
+ * 阶段 A 没有任何组件使用它们，所以不会改变现有渲染。
+ */
+@theme inline {
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-on-surface-faint: var(--on-surface-faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary-container: var(--on-primary-container);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-danger: var(--danger);
+  --color-danger-container: var(--danger-container);
+  --color-success: var(--success);
+  --color-success-container: var(--success-container);
+  --color-warning: var(--warning);
+  --color-warning-container: var(--warning-container);
+  /* 阶段 B 组件令牌（只加不改） */
+  --color-fill-chip: var(--fill-chip);
+  --color-fill-hover: var(--fill-hover);
+  --color-fill-strong: var(--fill-strong);
+  --color-fill-muted: var(--fill-muted);
+  --color-fill-tint: var(--fill-tint);
+  --color-text-subtle: var(--text-subtle);
+  --color-text-muted: var(--text-muted);
+  --color-text-emphasis: var(--text-emphasis);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-outline-strong: var(--outline-strong);
+  --color-danger-from: var(--danger-from);
+  --color-danger-to: var(--danger-to);
+  /* 短别名：组件里写 `text-secondary` / `text-muted` / `text-subtle` / `text-emphasis` / `text-tertiary`，
+     避免 `text-text-secondary` 这种双前缀。长名保留给需要显式说明「这是文字等级」的地方。 */
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-subtle: var(--text-subtle);
+  --color-muted: var(--text-muted);
+  --color-emphasis: var(--text-emphasis);
+  --color-strong: var(--text-strong);
+  --color-danger-on: var(--danger-on);
+  --color-warning-on: var(--warning-on);
+  --color-success-on: var(--success-on);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning-soft: var(--warning-soft);
+  --color-success-soft: var(--success-soft);
+  --color-outline-medium: var(--outline-medium);
+  --color-text-secondary-strong: var(--text-secondary-strong);
+  --color-fill-tint-hover: var(--fill-tint-hover);
+  --color-text-muted-strong: var(--text-muted-strong);
+  --color-outline-medium-strong: var(--outline-medium-strong);
+  --color-fill-muted-soft: var(--fill-muted-soft);
+  --color-fill-solid: var(--fill-solid);
+  --color-fill-scrim: var(--fill-scrim);
+  --color-fill-scrim-soft: var(--fill-scrim-soft);
+}
+
+/* ================================================================ 组件层令牌（阶段 B）
+ *
+ * 这些是"组件往自己身上刷的颜色"，玻璃皮肤逐值照抄旧值（所以替换前后像素一致），MD3 皮肤映射到
+ * tonal surface / 文字等级。放在阶段 A 令牌之后，不改动阶段 A 的取值。
+ */
+:root,
+[data-skin='glass'] {
+  --glass-blur-soft: 24px;
+  --fill-chip: rgb(255 255 255 / 0.5);
+  --fill-hover: rgb(255 255 255 / 0.8);
+  --fill-strong: rgb(255 255 255 / 0.9);
+  --fill-muted: rgb(24 24 27 / 0.07);
+  --fill-codeblock: #eff2f6;
+  --fill-track: rgb(15 23 42 / 0.08);
+  --fill-track-ring: rgb(15 23 42 / 0.06);
+  --fill-veil: rgb(255 255 255 / 0.72);
+  --outline-strong: rgb(255 255 255 / 0.65);
+  --outline-focus: rgb(96 165 250 / 0.8);
+  --text-emphasis: oklch(0.274 0.006 286.033);
+  --text-strong: oklch(0.37 0.013 285.805);
+  --text-button: oklch(0.37 0.013 285.805);
+  --text-subtle: rgb(113 113 122);
+  --text-link: rgb(37 99 235);
+  --text-muted: oklch(0.442 0.017 285.786);
+  --text-secondary: oklch(0.552 0.016 285.938);
+  --text-tertiary: oklch(0.705 0.015 286.067);
+  --fill-tint: rgb(255 255 255 / 0.6);
+  --text-on-primary-soft: oklch(0.488 0.243 264.376);
+  --radius-pill: calc(infinity * 1px);
+  --primary-from: oklch(0.623 0.214 259.815);
+  --primary-to: oklch(0.546 0.245 262.881);
+  --primary-from-hover: oklch(0.707 0.165 254.624);
+  --primary-to-hover: oklch(0.623 0.214 259.815);
+  --primary-shadow: rgb(37 99 235 / 0.8);
+  --primary-container-soft: oklab(0.97 -0.00371685 -0.0134976 / 0.7);
+  --primary-outline: oklab(0.707 -0.0437502 -0.159094 / 0.6);
+  --danger-from: #ff2357;
+  --danger-to: #e70044;
+  --danger-from-hover: #ff667f;
+  --danger-to-hover: #ff2357;
+  --danger-shadow: rgb(225 29 72 / 0.8);
+}
+
+[data-skin='glass'].dark {
+  --glass-blur-soft: 24px;
+  --fill-chip: rgb(255 255 255 / 0.06);
+  --fill-hover: rgb(255 255 255 / 0.12);
+  --fill-strong: rgb(24 24 27 / 0.9);
+  --fill-muted: rgb(255 255 255 / 0.12);
+  --fill-codeblock: #171c23;
+  --fill-track: rgb(255 255 255 / 0.1);
+  --fill-track-ring: rgb(255 255 255 / 0.08);
+  --fill-veil: rgb(24 24 27 / 0.72);
+  --outline-strong: rgb(255 255 255 / 0.1);
+  --outline-focus: rgb(96 165 250 / 0.8);
+  --text-emphasis: oklch(0.967 0.001 286.375);
+  --text-strong: oklch(0.967 0.001 286.375);
+  --text-button: oklch(0.92 0.004 286.32);
+  --text-subtle: rgb(161 161 170);
+  --text-link: rgb(96 165 250);
+  --text-muted: oklch(0.871 0.006 286.286);
+  --text-secondary: oklch(0.705 0.015 286.067);
+  --text-tertiary: oklch(0.705 0.015 286.067);
+  --fill-tint: rgb(255 255 255 / 0.1);
+  --text-on-primary-soft: oklch(0.882 0.059 254.128);
+  --primary-from: #3080ff;
+  --primary-to: #155dfc;
+  --primary-from-hover: #54a2ff;
+  --primary-to-hover: #3080ff;
+  --primary-shadow: rgb(37 99 235 / 0.8);
+  --primary-container-soft: oklab(0.623 -0.0378409 -0.210628 / 0.15);
+  --primary-outline: oklab(0.707 -0.0437502 -0.159094 / 0.4);
+  --danger-from: #f43f5e;
+  --danger-to: #e11d48;
+  --danger-from-hover: #fb7185;
+  --danger-to-hover: #f43f5e;
+  --danger-shadow: rgb(225 29 72 / 0.8);
+}
+
+/* MD3：同样的组件令牌落到 tonal surface / 文字等级上；毛玻璃半径一律 0。 */
+[data-skin='md3'] {
+  --glass-blur-soft: 0px;
+  --fill-chip: var(--surface-2);
+  --fill-hover: var(--surface-3);
+  --fill-strong: var(--surface-2);
+  --fill-muted: var(--surface-2);
+  --fill-codeblock: var(--surface-2);
+  --fill-track: var(--surface-3);
+  --fill-track-ring: var(--outline-variant);
+  --fill-veil: rgb(255 251 255 / 0.85);
+  --outline-strong: var(--outline-variant);
+  --outline-focus: var(--primary);
+  --text-emphasis: var(--on-surface);
+  --text-strong: var(--on-surface);
+  --text-muted: var(--on-surface-variant);
+  --text-on-primary-soft: var(--on-primary-container);
+  --text-button: var(--on-surface);
+  --text-subtle: var(--on-surface-variant);
+  --text-secondary: var(--on-surface-variant);
+  --text-tertiary: var(--on-surface-faint);
+  --fill-tint: var(--surface-1);
+  --text-link: var(--primary);
+  --primary-from: var(--primary);
+  --primary-to: var(--primary);
+  --primary-from-hover: var(--primary-container);
+  --primary-to-hover: var(--primary);
+  --primary-shadow: transparent;
+  --primary-container-soft: var(--primary-container);
+  --primary-outline: var(--primary);
+  --danger-from: var(--danger);
+  --danger-to: var(--danger);
+  --danger-from-hover: var(--danger-container);
+  --danger-to-hover: var(--danger);
+  --danger-shadow: transparent;
+}
+
+[data-skin='md3'].dark {
+  --fill-veil: rgb(20 18 24 / 0.85);
+}
+
+
 @keyframes rc-rise {
   from {
     opacity: 0;
@@ -109,8 +550,11 @@ body {
 }
 
 body {
-  @apply bg-zinc-100 text-zinc-900 antialiased dark:bg-[#07080c] dark:text-zinc-100;
+  background-color: var(--surface-0);
+  color: var(--on-surface);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -137,29 +581,42 @@ body {
   /* -------------------------------------------------------------- liquid glass */
 
   .glass {
-    @apply border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
-      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
-      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    box-shadow: var(--shadow-1);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   }
   .glass-soft {
-    @apply border border-white/50 bg-white/40 backdrop-blur-xl backdrop-saturate-150
-      dark:border-white/[0.08] dark:bg-white/[0.04];
+    border: 1px solid var(--outline-variant);
+    background-color: var(--surface-3);
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur-soft)) saturate(150%);
   }
   .card {
-    @apply rounded-2xl border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
-      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
-      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+    border-radius: var(--radius-rc-lg);
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    box-shadow: var(--shadow-1);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   }
   .panel {
-    @apply rounded-3xl border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
-      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
-      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+    border-radius: 1.5rem;
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    box-shadow: var(--shadow-1);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   }
   /* Sidebar, header and composer share one radius (18px), and the brand tile matches it too. */
   .panel-tight {
-    @apply rounded-[18px] border border-white/60 bg-white/60 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
-      backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
-      dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+    border-radius: var(--radius-rc-xl);
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    box-shadow: var(--shadow-1);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   }
   /*
    * 右栏专用：**不带 backdrop-filter** 的实色面板。
@@ -169,11 +626,17 @@ body {
    * 90% 实色底 + 同样的圆角/描边，观感几乎一致，却没有那一次全区域模糊采样。
    */
   .panel-solid {
-    @apply rounded-[18px] border border-white/60 bg-white/90 shadow-[0_8px_30px_-12px_rgb(15_23_42/0.18)]
-      dark:border-white/10 dark:bg-zinc-900/90 dark:shadow-[0_10px_40px_-16px_rgb(0_0_0/0.7)];
+    border-radius: var(--radius-rc-xl);
+    border: 1px solid var(--outline);
+    background-color: var(--fill-strong);
+    box-shadow: var(--shadow-1);
   }
   .brand-tile {
-    @apply inline-block shrink-0 overflow-hidden rounded-[10px] ring-1 ring-white/60 dark:ring-white/10;
+    display: inline-block;
+    flex-shrink: 0;
+    overflow: hidden;
+    border-radius: var(--radius-rc-sm);
+    box-shadow: 0 0 0 1px var(--outline);
   }
 
   /*
@@ -183,19 +646,22 @@ body {
    * blue cast in the glass and the blue halo around it.
    */
   .prompt-glass {
-    @apply relative isolate rounded-2xl rounded-br-lg border border-white/60 bg-white/60
-      text-zinc-700 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-white/[0.06]
-      dark:text-zinc-100;
+    position: relative;
+    isolation: isolate;
+    border-radius: var(--radius-rc-lg);
+    border-bottom-right-radius: 0.5rem;
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    color: var(--text-strong);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
     background-image:
       linear-gradient(168deg, rgb(96 165 250 / 0.22) 0%, rgb(37 99 235 / 0.12) 55%, rgb(29 78 216 / 0.2) 100%);
     box-shadow:
-      /* specular highlights, on top of the chip's own material */
-      inset 0 1px 0 rgb(255 255 255 / 0.55),
-      inset 0 -18px 28px -22px rgb(255 255 255 / 0.55),
-      inset 0 0 0 1px rgb(255 255 255 / 0.18),
-      0 8px 30px -12px rgb(15 23 42 / 0.18),
-      0 10px 30px -18px rgb(37 99 235 / 0.5),
-      0 22px 56px -34px rgb(37 99 235 / 0.45);
+        inset 0 1px 0 rgb(255 255 255 / 0.55),,
+        inset 0 -18px 28px -22px rgb(255 255 255 / 0.55),,
+        inset 0 0 0 1px rgb(255 255 255 / 0.18),,
+        var(--shadow-3);
   }
   /* Specular sheen: two soft pools of light and a diagonal band, behind the text. */
   .prompt-glass::before {
@@ -215,12 +681,10 @@ body {
     background-image:
       linear-gradient(168deg, rgb(96 165 250 / 0.18) 0%, rgb(37 99 235 / 0.1) 55%, rgb(30 58 138 / 0.22) 100%);
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.28),
-      inset 0 -18px 28px -22px rgb(255 255 255 / 0.22),
-      inset 0 0 0 1px rgb(255 255 255 / 0.1),
-      0 10px 40px -16px rgb(0 0 0 / 0.7),
-      0 10px 30px -18px rgb(37 99 235 / 0.4),
-      0 22px 56px -34px rgb(37 99 235 / 0.35);
+        inset 0 1px 0 rgb(255 255 255 / 0.28),,
+        inset 0 -18px 28px -22px rgb(255 255 255 / 0.22),,
+        inset 0 0 0 1px rgb(255 255 255 / 0.1),,
+        var(--shadow-3);
   }
   .dark .prompt-glass::before {
     background:
@@ -286,12 +750,8 @@ body {
   .rc-md .cm-editor {
     min-height: 2.75rem;
     background: transparent;
-    color: #18181b;
-    caret-color: #18181b;
-  }
-  .dark .rc-md .cm-editor {
-    color: #f4f4f5;
-    caret-color: #f4f4f5;
+    color: var(--on-surface);
+    caret-color: var(--on-surface);
   }
   /*
    * CodeMirror's own base theme draws a dotted outline on focus, a black caret and a black cursor
@@ -309,9 +769,7 @@ body {
   .rc-md .cm-activeLine,
   .rc-md .cm-activeLineGutter { background: transparent !important; }
   .rc-md .cm-editor,
-  .rc-md .cm-content { caret-color: #18181b !important; }
-  .dark .rc-md .cm-editor,
-  .dark .rc-md .cm-content { caret-color: #f4f4f5 !important; }
+  .rc-md .cm-content { caret-color: var(--on-surface) !important; }
   .rc-md .cm-scroller {
     @apply px-3.5 py-2.5 text-[15px] leading-relaxed;
     max-height: 38dvh;
@@ -323,11 +781,9 @@ body {
   .rc-md .cm-line { padding: 0; }
   .rc-md .cm-cursor,
   .rc-md .cm-dropCursor {
-    border-left: 1.5px solid #18181b !important;
+    border-left: 1.5px solid var(--on-surface) !important;
     margin-left: -0.5px;
   }
-  .dark .rc-md .cm-cursor,
-  .dark .rc-md .cm-dropCursor { border-left-color: #f4f4f5 !important; }
   .rc-md .cm-selectionBackground,
   .rc-md .cm-content ::selection { background: rgb(96 165 250 / 0.35) !important; }
   .rc-md .cm-editor.cm-focused .cm-selectionBackground { background: rgb(96 165 250 / 0.4) !important; }
@@ -339,15 +795,13 @@ body {
   .rc-md-strike { text-decoration: line-through; }
   /* Inline code reads as a chip: muted fill, tight padding, small radius. */
   .rc-md-code {
-    @apply font-mono;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     padding: 0.05rem 0.3rem;
     border-radius: 0.4rem;
-    background: rgb(24 24 27 / 0.07);
+    background: var(--fill-muted);
   }
-  .dark .rc-md-code { background: rgb(255 255 255 / 0.12); }
-  .rc-md-link { color: rgb(37 99 235); text-decoration: underline; text-underline-offset: 2px; }
-  .dark .rc-md-link { color: rgb(96 165 250); }
+  .rc-md-link { color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
   .rc-md-h1 { font-size: 1.25rem; font-weight: 600; line-height: 1.3; }
   .rc-md-h2 { font-size: 1.125rem; font-weight: 600; line-height: 1.3; }
   .rc-md-h3 { font-size: 1rem; font-weight: 600; line-height: 1.3; }
@@ -357,12 +811,11 @@ body {
   .rc-md-quote {
     border-left: 2px solid rgb(148 163 184 / 0.7);
     padding-left: 0.75rem;
-    color: rgb(113 113 122);
+    color: var(--text-subtle);
   }
-  .dark .rc-md-quote { color: rgb(161 161 170); }
   /* The bullet mark is replaced away, so the line draws its own. */
   .dark .rc-md-codeblock {
-    background: rgb(255 255 255 / 0.08);
+    background: var(--fill-codeblock);
   }
   .rc-md-hr {
     border-top: 1px solid rgb(148 163 184 / 0.4);
@@ -408,17 +861,13 @@ body {
   }
   /* The language chip, sitting where the opening fence was. */
   .rc-md-langchip {
-    @apply font-mono;
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
     line-height: 1.4;
     padding: 0 0.35rem;
     border-radius: 0.375rem;
-    color: rgb(113 113 122);
-    background: rgb(24 24 27 / 0.07);
-  }
-  .dark .rc-md-langchip {
-    color: rgb(161 161 170);
-    background: rgb(255 255 255 / 0.12);
+    color: var(--text-subtle);
+    background: var(--fill-muted);
   }
   .rc-md-codeblock-first {
     border-top-left-radius: 0.75rem;
@@ -435,8 +884,7 @@ body {
    * alpha fill stacks wherever boxes meet — which reads as a bright hairline in the dark theme and as
    * nothing at all on the light one. An opaque value per theme is visible on both and cannot stack.
    */
-  .rc-md-codeblock { background: #eff2f6; }
-  .dark .rc-md-codeblock { background: #171c23; }
+  .rc-md-codeblock { background: var(--fill-codeblock); }
   /*
    * CodeMirror paints each line as its own box, so adjacent opaque fills can still leave a sub-pixel
    * gap. Overlapping by one pixel closes it: the fills are opaque and identical, so the overlap is
@@ -639,58 +1087,151 @@ body {
     top: 0;
     z-index: 10;
     border-radius: 0.5rem;
-    background: rgb(255 255 255 / 0.9);
-    box-shadow: 0 8px 16px -14px rgb(15 23 42 / 0.55);
-  }
-  .dark .rc-combo-group {
-    background: rgb(14 18 24 / 0.94);
-    box-shadow: 0 8px 16px -14px rgb(0 0 0 / 0.8);
+    background-color: var(--surface-2);
+    box-shadow: var(--shadow-2);
   }
   /* -------------------------------------------------------------- controls */
 
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/60 bg-white/60
-      px-3 py-1.5 text-sm text-zinc-700 shadow-[0_2px_10px_-6px_rgb(15_23_42/0.3)] backdrop-blur-xl
-      transition-all duration-200 hover:-translate-y-px hover:bg-white/80 active:translate-y-0
-      disabled:translate-y-0 disabled:opacity-40 disabled:hover:bg-white/60 dark:border-white/10
-      dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.12];
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border-radius: var(--radius-rc-md);
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: var(--text-button);
+    box-shadow: 0 2px 10px -6px rgb(15 23 42 / 0.3);
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft));
+    backdrop-filter: blur(var(--glass-blur-soft));
+    transition: all 0.2s;
+  }
+  .btn:hover:not(:disabled) {
+    background-color: var(--fill-hover);
+    transform: translateY(-1px);
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .btn:disabled {
+    opacity: 0.4;
   }
   .btn-primary {
-    @apply border-transparent bg-gradient-to-b from-blue-500 to-blue-600 text-white
-      shadow-[0_6px_20px_-8px_rgb(37_99_235/0.8)] hover:from-blue-400 hover:to-blue-500
-      dark:from-blue-500 dark:to-blue-600;
+    border-color: transparent;
+    background-image: linear-gradient(to bottom, var(--primary-from), var(--primary-to));
+    color: var(--on-primary);
+    box-shadow: 0 6px 20px -8px var(--primary-shadow);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-image: linear-gradient(to bottom, var(--primary-from-hover), var(--primary-to-hover));
   }
   .btn-danger {
-    @apply border-transparent bg-gradient-to-b from-rose-500 to-rose-600 text-white
-      shadow-[0_6px_20px_-8px_rgb(225_29_72/0.8)] hover:from-rose-400 hover:to-rose-500;
+    border-color: transparent;
+    background-image: linear-gradient(to bottom, var(--danger-from), var(--danger-to));
+    color: var(--on-primary);
+    box-shadow: 0 6px 20px -8px var(--danger-shadow);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-image: linear-gradient(to bottom, var(--danger-from-hover), var(--danger-to-hover));
   }
   .chip {
-    @apply inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/60 bg-white/50
-      px-2.5 py-1 text-xs text-zinc-600 backdrop-blur-xl transition-all duration-200 hover:bg-white/80
-      dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.12];
+    display: inline-flex;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--outline);
+    background-color: var(--fill-chip);
+    padding: 0.25rem 0.625rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: var(--text-muted);
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft));
+    backdrop-filter: blur(var(--glass-blur-soft));
+    transition: all 0.2s;
+  }
+  .chip:hover {
+    background-color: var(--fill-hover);
   }
   .chip-strong {
-    @apply border-blue-400/60 bg-blue-50/70 text-blue-700 dark:border-blue-400/40 dark:bg-blue-500/15 dark:text-blue-200;
+    border-color: var(--primary-outline);
+    background-color: var(--primary-container-soft);
+    color: var(--text-on-primary-soft);
   }
   /* Toolbar control with the height every button in the chrome shares (36px). */
   .control {
-    @apply inline-flex h-9 max-w-full items-center gap-1.5 rounded-xl border border-white/60 bg-white/50
-      px-3 text-[13px] text-zinc-600 backdrop-blur-xl transition-all duration-200
-      hover:-translate-y-px hover:bg-white/80 active:translate-y-0 disabled:translate-y-0
-      disabled:opacity-40 disabled:hover:bg-white/50 dark:border-white/10 dark:bg-white/[0.06]
-      dark:text-zinc-300 dark:hover:bg-white/[0.12];
+    display: inline-flex;
+    height: 2.25rem;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: var(--radius-rc-md);
+    border: 1px solid var(--outline);
+    background-color: var(--fill-chip);
+    padding: 0 0.75rem;
+    font-size: 13px;
+    line-height: 1.25rem;
+    color: var(--text-muted);
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft));
+    backdrop-filter: blur(var(--glass-blur-soft));
+    transition: all 0.2s;
+  }
+  .control:hover:not(:disabled) {
+    background-color: var(--fill-hover);
+    transform: translateY(-1px);
+  }
+  .control:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .control:disabled {
+    opacity: 0.4;
   }
   .field {
-    @apply w-full rounded-xl border border-white/60 bg-white/60 px-3 py-2 text-sm text-zinc-800
-      shadow-inner outline-none backdrop-blur-xl transition-colors placeholder:text-zinc-400
-      focus:border-blue-400/80 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-100;
+    width: 100%;
+    border-radius: var(--radius-rc-md);
+    border: 1px solid var(--outline);
+    background-color: var(--surface-1);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: var(--text-emphasis);
+    box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05);
+    outline: none;
+    -webkit-backdrop-filter: blur(var(--glass-blur-soft));
+    backdrop-filter: blur(var(--glass-blur-soft));
+    transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+  }
+  .field::placeholder {
+    color: var(--on-surface-faint);
+  }
+  .field:focus {
+    border-color: var(--outline-focus);
   }
   .icon-btn {
     /* 小元素不值得一次模糊采样：20px 的按钮背后几乎只有底色，去掉 backdrop-blur 观感不变。 */
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/60 bg-white/50
-      text-zinc-600 transition-all duration-200 hover:-translate-y-px hover:bg-white/80
-      active:translate-y-0 disabled:opacity-40 disabled:hover:bg-white/50 dark:border-white/10
-      dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.12];
+    display: inline-flex;
+    height: 2.25rem;
+    width: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-rc-md);
+    border: 1px solid var(--outline);
+    background-color: var(--fill-chip);
+    color: var(--text-muted);
+    transition: all 0.2s;
+  }
+  .icon-btn:hover:not(:disabled) {
+    background-color: var(--fill-hover);
+    transform: translateY(-1px);
+  }
+  .icon-btn:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .icon-btn:disabled {
+    opacity: 0.4;
   }
 
   /* -------------------------------------------------------------- motion */
@@ -876,23 +1417,13 @@ body {
  * another border colour to keep in sync with the theme.
  */
 .usage-tile {
-  background: rgb(255 255 255 / 0.4);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.65);
-}
-
-.dark .usage-tile {
-  background: rgb(255 255 255 / 0.04);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--outline-strong);
 }
 
 .usage-bar {
-  background: rgb(15 23 42 / 0.08);
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.06);
-}
-
-.dark .usage-bar {
-  background: rgb(255 255 255 / 0.1);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+  background: var(--fill-track);
+  box-shadow: inset 0 0 0 1px var(--fill-track-ring);
 }
 
 .usage-bar-fill {
@@ -907,11 +1438,7 @@ body {
  * text behind competing with the list.
  */
 .panel-veil {
-  background: rgb(255 255 255 / 0.72) !important;
-}
-
-.dark .panel-veil {
-  background: rgb(24 24 27 / 0.72) !important;
+  background: var(--fill-veil) !important;
 }
 
 /* Streaming: a reply arrives dozens of times per second.
@@ -1075,5 +1602,229 @@ body {
   95.8333% { --brand-ring-angle: 354.10deg; }
   97.9167% { --brand-ring-angle: 357.07deg; }
   100% { --brand-ring-angle: 360.00deg; }
+}
+
+/* MD3: no glass, anywhere.
+
+   Material Design 3 expresses depth with tonal surfaces and elevation shadows, not blur, so every backdrop
+   filter has to be gone — not just the ones that read `--glass-blur`. Hard-coded utility classes
+   (`backdrop-blur-xl` and friends) ignore the variable entirely, which is how blur survived the switch.
+
+   `!important` is deliberate here: this is a guard, not a style. Anything that adds a backdrop filter later
+   would otherwise silently reintroduce glass in MD3, and the failure would be invisible in review. */
+[data-skin='md3'] *,
+[data-skin='md3'] *::before,
+[data-skin='md3'] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* MD3: no drifting colour field.
+
+   The liquid backdrop is six blurred colour blobs under a hue-rotate animation — it exists so the frosted
+   panels have something moving behind them. MD3 has no frosting to feed, and its depth comes from tonal
+   surfaces and elevation instead, so the whole layer is switched off: `visibility` rather than `display`
+   so nothing that measures the page (scroll height, observers) sees a layout change, and the animation is
+   stopped as well so the page stops repainting for a layer nobody can see. */
+[data-skin='md3'] .liquid-backdrop {
+  visibility: hidden;
+  animation: none;
+}
+
+[data-skin='md3'] .liquid-backdrop * {
+  animation: none !important;
+}
+
+/* The page background underneath it is the MD3 surface, not the glass tint. */
+[data-skin='md3'] body {
+  background: var(--surface-0);
+}
+
+/* MD3: shape and elevation.
+
+   Material 3 has its own shape scale and expresses depth with two-layer shadows on a tonal surface, not
+   with a frosted edge. Everything below is scoped to `[data-skin='md3']`, so the glass skin keeps its pill
+   buttons, its 18px cards and its soft ring highlights exactly as they are.
+
+   Buttons: MD3's filled button is 40px tall with a 20px radius — not the fully rounded pill the glass skin
+   uses, and it has no inner highlight ring, because there is no glass to catch light. */
+[data-skin='md3'] .btn-primary,
+[data-skin='md3'] .btn-ghost,
+[data-skin='md3'] .btn-quiet,
+[data-skin='md3'] .chip,
+[data-skin='md3'] .chip-strong,
+[data-skin='md3'] .control {
+  border-radius: 20px;
+  min-height: 2.5rem;
+  box-shadow: none;
+  transform: none;
+}
+
+[data-skin='md3'] .btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: transparent;
+}
+
+[data-skin='md3'] .btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+[data-skin='md3'] .btn-ghost,
+[data-skin='md3'] .chip {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  border-color: transparent;
+}
+
+[data-skin='md3'] .btn-quiet {
+  background: transparent;
+  color: var(--primary);
+  border-color: transparent;
+}
+
+/* Icon buttons are round in MD3 (a 40px touch target with a 20px radius). */
+[data-skin='md3'] .icon-btn {
+  border-radius: 20px;
+  box-shadow: none;
+}
+
+/* Surfaces: tonal fill plus elevation instead of a translucent sheet with a highlight ring. */
+[data-skin='md3'] .card,
+[data-skin='md3'] .panel,
+[data-skin='md3'] .panel-tight,
+[data-skin='md3'] .panel-solid,
+[data-skin='md3'] .prompt-glass,
+[data-skin='md3'] .glass,
+[data-skin='md3'] .glass-soft {
+  background: var(--surface-1);
+  border-color: transparent;
+  box-shadow: var(--shadow-1);
+  outline: none;
+}
+
+/* MD3 also drops the decorative sheen animations: with no glass there is nothing for them to light. */
+[data-skin='md3'] .prompt-glass::after,
+[data-skin='md3'] .rc-sheen::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+/* MD3: the side columns match the composer's radius.
+
+   MD3's own large shape (28px) is meant for sheets and dialogs, not for a column that runs the height of the
+   window: at that radius the side panels read as floating cards and stop agreeing with the composer, which
+   keeps its 18px. Both columns follow the composer here, so the three panels share one corner value and the
+   layout stays calm. */
+[data-skin='md3'] .panel-tight,
+[data-skin='md3'] .panel-solid {
+  border-radius: 18px;
+}
+
+/* MD3 / glass: a tile sits one step above its card.
+
+   The usage card stacks a card, tiles and a slot. Both the card and the tile used to carry their own inset
+   hairline, so all three read as the same kind of frame and the nesting was invisible — worst in MD3, whose
+   whole depth language is tonal layering plus elevation, not outlines.
+
+   So the inner surfaces lose the hairline and step one tonal level instead: in glass the tile keeps its
+   translucent fill, in MD3 it moves from surface-1 to surface-2. One idea per skin, no double frames. */
+/* The usage card sits inside the sidebar panel.
+
+   Both used `--surface-1`, so in glass the card dissolved into the column it lives on — the screenshot that
+   prompted this showed a tile grid with no card around it. A card inside a panel needs to be a step up from
+   the panel, not the same value as it: glass gets more opacity and a stronger shadow, MD3 moves to the next
+   tonal level (surface-2) and keeps elevation. */
+[data-skin='glass'] .usage-card {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-2);
+}
+
+[data-skin='md3'] .usage-card {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-1);
+}
+
+/* Tiles inside that card step up once more, so the nesting reads card > tile > slot. */
+[data-skin='glass'] .usage-tile {
+  background: var(--surface-1);
+}
+
+[data-skin='md3'] .usage-tile {
+  background: var(--surface-3);
+}
+
+[data-skin='glass'] .usage-tile,
+[data-skin='glass'] .usage-slot {
+  box-shadow: none;
+  border: 1px solid var(--outline-variant);
+}
+
+[data-skin='md3'] .usage-tile,
+[data-skin='md3'] .usage-slot {
+  background: var(--surface-2);
+  box-shadow: none;
+  border: 0;
+}
+
+/* The status chips are controls that sit on top of the composer, so they lift off it: a brighter fill in
+   glass, a container colour plus a hairline of elevation in MD3. No transform on hover — a chip that shifts
+   under the pointer reads as a layout bug. */
+[data-skin='glass'] .status-chip {
+  background: var(--surface-2);
+  border: 1px solid var(--outline);
+  box-shadow: var(--shadow-2);
+}
+
+[data-skin='md3'] .status-chip {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  border: 0;
+  box-shadow: var(--shadow-2);
+}
+
+/* Tool rows use the quiet elevation.
+
+   A tool card is a row inside the transcript, not a panel floating over it. At --shadow-1's 40px blur its
+   shadow reads as a smudge under each row — most visible in the dark skins, where a wide soft shadow over a
+   near-black background looks like dirt rather than depth. Rows get the short 2px shadow instead. */
+/* The reasoning chain and the tool rows are asides inside the transcript, so they share one quiet elevation.
+   Before this they inherited `.card`'s 40px shadow, which pooled at the rounded corners. */
+[data-skin='glass'] .reasoning-card,
+[data-skin='md3'] .reasoning-card {
+  box-shadow: var(--shadow-3);
+}
+
+[data-skin='glass'] .tool-card {
+  box-shadow: var(--shadow-3);
+}
+
+[data-skin='md3'] .tool-card {
+  box-shadow: var(--shadow-3);
+}
+
+/* A tool group is a container; the rows inside it are not cards.
+
+   The group used `.card` and every row inside used `.card` too, so six rows sat in a card that looked exactly
+   like them — the nesting was invisible and the shadows stacked. Only the outer group keeps the card
+   material and the elevation; the rows become flat strips separated by hairlines, which is what a list
+   inside a container should look like. */
+[data-skin='glass'] .tool-group,
+[data-skin='md3'] .tool-group {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-1);
+}
+
+/* Rows: no card of their own — no fill, no border, no shadow. The group's hairline separators do the work. */
+.tool-group .tool-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* A hairline between rows, but not above the first one or below the last. */
+.tool-group .tool-card + .tool-card {
+  border-top: 1px solid var(--outline-variant);
 }
 
