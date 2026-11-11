@@ -147,6 +147,75 @@ export const state = reactive({
   },
 })
 
+/**
+ * @param value - a workspace path.
+ * @returns its segments, with the drive letter folded and both separators treated the same.
+ *
+ * Comparing paths as strings gets the tree wrong: `C:\\a\\bc` starts with `C:\\a\\b` but is not inside it.
+ * Splitting into segments first is what makes the ancestry test correct.
+ */
+function pathSegments (value) {
+  return String(value ?? '')
+    .replace(/\\/gu, '/')
+    .split('/')
+    .filter((part) => part !== '')
+    .map((part, index) => (index === 0 ? part.toLowerCase() : part))
+}
+
+/**
+ * @param parent - candidate ancestor segments.
+ * @param child - candidate descendant segments.
+ * @returns whether every parent segment matches the child's opening segments, and the parent is shorter.
+ */
+function isAncestor (parent, child) {
+  if (parent.length === 0 || parent.length >= child.length) return false
+  for (let index = 0; index < parent.length; index += 1) {
+    if (parent[index] !== child[index]) return false
+  }
+  return true
+}
+
+/**
+ * @param groups - the flat workspace groups from `groupedSessions`.
+ * @returns the same groups arranged as a tree.
+ *
+ * Sessions are addressed by workspace, but the workspaces themselves only hint at their relationship through
+ * `path`. Nesting by the longest ancestor that actually exists turns that hint into the tree the sidebar
+ * shows: a workspace whose directory sits inside another's becomes its child, and one on a different drive
+ * stays at the root.
+ */
+export function workspaceTreeOf (groups) {
+  const nodes = groups.map((group) => ({
+    ...group,
+    segments: pathSegments(group.path),
+    children: [],
+    totalSessions: group.sessions.length,
+  }))
+  const roots = []
+  for (const node of nodes) {
+    if (node.segments.length === 0) {
+      roots.push(node)
+      continue
+    }
+    // The closest ancestor wins, so a three-level layout nests at the deepest match rather than the first.
+    let parent
+    for (const candidate of nodes) {
+      if (candidate === node) continue
+      if (!isAncestor(candidate.segments, node.segments)) continue
+      if (parent === undefined || candidate.segments.length > parent.segments.length) parent = candidate
+    }
+    if (parent === undefined) roots.push(node)
+    else parent.children.push(node)
+  }
+  // A container with no sessions of its own still shows when something below it has some.
+  const prune = (node) => {
+    node.children = node.children.filter(prune)
+    node.totalSessions = node.sessions.length + node.children.reduce((sum, child) => sum + child.totalSessions, 0)
+    return node.totalSessions > 0
+  }
+  return roots.filter(prune)
+}
+
 /** The Session the sidebar should show as active. */
 export const selectedSession = computed(() => state.sessions.find((session) => session.id === state.selected))
 
