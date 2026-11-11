@@ -423,20 +423,65 @@ function sniffImageType (bytes) {
  * @param attachmentId - `sha256:<hex>` or bare `<hex>`.
  * @returns the bytes and media type, or undefined when it cannot be read.
  */
-function readAttachmentObject (attachmentId) {
-  const hex = String(attachmentId ?? '').replace(/^sha256:/iu, '').trim().toLowerCase()
-  if (!/^[0-9a-f]{64}$/u.test(hex)) return undefined
-  const stored = join(homedir(), '.dsh', 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
-  try {
-    const info = statSync(stored)
-    if (!info.isFile() || info.size > MAX_IMAGE_BYTES) return undefined
-    const bytes = readFileSync(stored)
-    const mediaType = sniffImageType(bytes)
-    if (mediaType === undefined) return undefined
-    return { bytes, mediaType }
-  } catch {
-    return undefined
+/**
+ * @param attachmentId - an id that may carry a scheme or other decoration around its hash.
+ * @returns the 64 hex characters, or undefined.
+ *
+ * Ids arrive in more than one shape across DSH versions, so the hash is extracted rather than assumed to be
+ * the whole string: anything that contains a 64-character hex run identifies the same stored object.
+ */
+function attachmentHash (attachmentId) {
+  const match = /([0-9a-f]{64})/iu.exec(String(attachmentId ?? ''))
+  return match === null ? undefined : match[1].toLowerCase()
+}
+
+/**
+ * @returns every place the attachment store could live, most trustworthy first.
+ *
+ * `homedir()` is not reliable inside the desktop shell: Electron can start the Host with a different HOME.
+ * The plugin already knows the real DSH home, because its own token lives in `<dsh home>/remote-control/`, so
+ * that path is the first candidate and the environment is only a fallback.
+ */
+function attachmentRoots () {
+  const roots = []
+  for (const base of [process.env.USERPROFILE, process.env.HOME, homedir()]) {
+    if (typeof base !== 'string' || base === '') continue
+    const candidate = join(base, '.dsh', 'attachments', 'v1', 'objects')
+    if (!roots.includes(candidate)) roots.push(candidate)
   }
+  return roots
+}
+
+/**
+ * Read one attachment straight from the content-addressed store.
+ *
+ * The Session Controller's attachment surface is not stable across DSH versions — an earlier shape took
+ * `{ sessionId, attachmentId }`, the current one expects a reference object — and when it disagrees the route
+ * silently answered 404, which left every image stuck on a loading placeholder. The bytes live in a plain
+ * content-addressed directory, so reading them directly is both simpler and immune to that churn.
+ *
+ * The hash is validated as 64 hex characters and the path is built from it, so nothing outside that store can
+ * be reached.
+ * @param attachmentId - the attachment identity from a Session log.
+ * @returns the bytes, media type and the path that matched, or undefined.
+ */
+function readAttachmentObject (attachmentId) {
+  const hex = attachmentHash(attachmentId)
+  if (hex === undefined) return undefined
+  for (const root of attachmentRoots()) {
+    const stored = join(root, hex.slice(0, 2), hex)
+    try {
+      const info = statSync(stored)
+      if (!info.isFile() || info.size > MAX_IMAGE_BYTES) continue
+      const bytes = readFileSync(stored)
+      const mediaType = sniffImageType(bytes)
+      if (mediaType === undefined) continue
+      return { bytes, mediaType, stored }
+    } catch {
+      /* try the next root */
+    }
+  }
+  return undefined
 }
 
 /** @returns the Session catalog shaped for the page. */
@@ -1666,8 +1711,26 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
         json(400, { error: 'sessionId and attachmentId are required' })
         return
       }
+      // The flat `{ sessionId, attachmentId }` shape is what this build takes. A newer controller may want a
+      // reference object instead, so that shape is retried — but only when the first call failed because of its
+      // shape, never after a business error: retrying "not reachable" under a signature that ignores the id
+      // would answer 200 with the wrong bytes.
+      let value
+      let lastError
       try {
-        const value = await ctx.sessionController.attachment({ sessionId, attachmentId })
+        value = await ctx.sessionController.attachment({ sessionId, attachmentId })
+      } catch (error) {
+        lastError = error
+      }
+      if ((value === undefined || value === null) && lastError instanceof TypeError) {
+        try {
+          value = await ctx.sessionController.attachment({ attachment: { sessionId, attachmentId } })
+          lastError = undefined
+        } catch (error) {
+          lastError = error
+        }
+      }
+      if (value !== undefined && value !== null) {
         json(200, {
           mediaType: value?.attachment?.mediaType ?? 'image/png',
           data: value?.data ?? '',
@@ -1675,7 +1738,10 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           width: value?.attachment?.width,
           height: value?.attachment?.height,
         })
-      } catch (error) {
+        return
+      }
+      {
+        const error = lastError
         // The controller rejected the request (its signature differs across DSH versions); fall back to
         // the content-addressed store so images do not stay on a loading placeholder.
         const stored = readAttachmentObject(attachmentId)
@@ -1683,7 +1749,16 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
           json(200, { mediaType: stored.mediaType, data: stored.bytes.toString('base64') })
           return
         }
-        json(404, { error: String(error?.message ?? error) })
+        // Say what was tried, so a failure here is diagnosable from the remote page and not just a placeholder.
+        const hash = attachmentHash(attachmentId)
+        ctx.logger?.warn?.(
+          `[remote-control] attachment ${String(attachmentId)} not found (hash ${String(hash)}, roots ${attachmentRoots().join(' | ')}): ${String(error?.message ?? error)}`,
+        )
+        json(404, {
+          error: hash === undefined
+            ? `附件 id 不是可识别的哈希：${String(attachmentId)}`
+            : `附件不在存储中（hash ${hash.slice(0, 12)}…）：${String(error?.message ?? error)}`,
+        })
       }
       return
     }

@@ -715,7 +715,14 @@ export function ensureAttachmentImage (sessionId, attachmentId, meta) {
     return
   }
   attachmentPending.add(key)
-  api(`/api/attachment?sessionId=${encodeURIComponent(sessionId)}&attachmentId=${encodeURIComponent(attachmentId)}`)
+  // The gateway reads an image from a durable reference, and the block that produced this call carries one.
+  // Forwarding the fields it needs is what lets the Host hand the controller a ref it accepts.
+  const ref = new URLSearchParams({ sessionId, attachmentId })
+  for (const field of ['mediaType', 'bytes', 'width', 'height', 'name']) {
+    const value = meta?.[field]
+    if (value !== undefined && value !== null && value !== '') ref.set(field, String(value))
+  }
+  api(`/api/attachment?${ref.toString()}`)
     .then((payload) => {
       attachmentImages.set(key, payload.data === '' ? '' : `data:${payload.mediaType};base64,${payload.data}`)
     })

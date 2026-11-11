@@ -215,9 +215,11 @@ function createHost () {
       },
       attachment: async (request) => {
         calls.attachments.push(request)
-        if (request.attachmentId === 'missing') throw new Error('attachment not reachable')
+        // Accept both the reference object and the older flat pair, so the stub tracks whichever the route sends.
+        const attachmentId = request.attachment?.attachmentId ?? request.attachmentId
+        if (attachmentId === 'missing') throw new Error('attachment not reachable')
         return {
-          attachment: { attachmentId: request.attachmentId, mediaType: 'image/png', bytes: 68, width: 1, height: 1 },
+          attachment: { attachmentId, mediaType: 'image/png', bytes: 68, width: 1, height: 1 },
           data: PIXEL.slice(PIXEL.indexOf(',') + 1),
         }
       },
@@ -430,7 +432,8 @@ await check('an attachment is read back for the transcript preview', async () =>
   const payload = await response.json()
   assert.equal(payload.mediaType, 'image/png')
   assert.equal(payload.data.length > 0, true)
-  assert.deepEqual(host.calls.attachments, [{ sessionId: 's1', attachmentId: 'att-0' }])
+  // The route hands the gateway one durable reference; that is the shape its `attachment()` reads.
+  assert.deepEqual(host.calls.attachments, [{ attachment: { attachmentId: 'att-0' } }])
 
   const missing = await fetch(`${base}/api/attachment?sessionId=s1&attachmentId=missing`, { headers: cookie })
   assert.equal(missing.status, 404)

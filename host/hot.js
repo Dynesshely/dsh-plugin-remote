@@ -11,7 +11,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { handleModelMeta } from './model-meta.js'
@@ -903,6 +903,117 @@ async function dshControl (api, mode) {
  * @param api - `{ctx, request, url, json, readJson, broadcast, sessionsPayload, managementState, boundPort, setPinned, setArchived}`.
  * @returns whether this module handled the request.
  */
+/**
+ * Rebuild the durable reference the gateway reads an image from.
+ * @param url - request url carrying the fields the transcript block already has.
+ * @returns a reference object, or undefined when the id is not usable.
+ *
+ * The gateway's `attachment()` takes `{ attachment }` and hands it to `attachments.readImage`, which reads
+ * `ref.attachmentId` and verifies the stored bytes against `ref.mediaType` / `ref.bytes` / dimensions. Passing
+ * only two loose strings answered "Unable to read image attachment." for every image; forwarding the block's
+ * own metadata is what makes the reference valid.
+ */
+function attachmentRef (url) {
+  const raw = String(url.searchParams.get('attachmentId') ?? '').trim()
+  if (raw === '') return undefined
+  // This build stores objects under a bare hash but the gateway only accepts `sha256:<hex>`, so a hash-shaped
+  // id is normalised. Any other id is passed through untouched: the controller is the authority on what it
+  // means, and refusing it here would break ids this build does not happen to use.
+  const match = /([0-9a-f]{64})/iu.exec(raw)
+  const ref = { attachmentId: match === null ? raw : `sha256:${match[1].toLowerCase()}` }
+  for (const [field, cast] of [['mediaType', String], ['bytes', Number], ['width', Number], ['height', Number], ['name', String]]) {
+    const raw = url.searchParams.get(field)
+    if (raw === null || raw === '') continue
+    const value = cast(raw)
+    if (cast === Number && !Number.isFinite(value)) continue
+    ref[field] = value
+  }
+  return ref
+}
+
+
+/**
+ * @param ref - a durable attachment reference, possibly missing byte and pixel metadata.
+ * @returns the reference with `bytes` / `width` / `height` filled in from the stored object.
+ *
+ * The gateway compares every field against the bytes it finds, and refuses the read when one differs. The
+ * transcript usually has the values, but a Session replayed from an older build may not — reading the object
+ * once is cheaper than a failed request and keeps the route honest about what it is serving.
+ */
+async function completeRef (ref) {
+  const hex = /([0-9a-f]{64})/iu.exec(String(ref.attachmentId))?.[1]
+  if (hex === undefined) return ref
+  if (ref.bytes !== undefined && ref.width !== undefined && ref.height !== undefined) return ref
+  const base = process.env.DSH_HOME ?? process.env.USERPROFILE ?? ''
+  const stored = join(base, '.dsh', 'attachments', 'v1', 'objects', hex.slice(0, 2), hex)
+  let bytes
+  try {
+    bytes = readFileSync(stored)
+  } catch {
+    // Without the measurement the gateway will refuse the read, so say so instead of pretending otherwise.
+    throw new Error(`附件对象无法读取：${stored}`)
+  }
+  const meta = imageSize(bytes)
+  return {
+    ...ref,
+    bytes: ref.bytes ?? bytes.length,
+    width: ref.width ?? meta?.width,
+    height: ref.height ?? meta?.height,
+    mediaType: ref.mediaType ?? meta?.mediaType,
+  }
+}
+
+/** @returns `{ width, height, mediaType }` from a PNG or JPEG header, or undefined. */
+function imageSize (bytes) {
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), mediaType: 'image/png' }
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    let offset = 2
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue }
+      const marker = bytes[offset + 1]
+      // SOF0..SOF15 carry the frame size; the other segments only carry a length to skip.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { width: bytes.readUInt16BE(offset + 7), height: bytes.readUInt16BE(offset + 5), mediaType: 'image/jpeg' }
+      }
+      offset += 2 + bytes.readUInt16BE(offset + 2)
+    }
+  }
+  return undefined
+}
+
+/**
+ * Serve one transcript image.
+ * @param api - request context.
+ * @returns whether the request was handled.
+ *
+ * Lives in the hot module on purpose: the reference shape is a moving target across DSH builds, and this is the
+ * route that has to be fixable without asking the user to restart the whole app again.
+ */
+async function attachmentImage (api) {
+  const base = attachmentRef(api.url)
+  if (base === undefined) {
+    api.json(400, { error: 'attachmentId is required' })
+    return true
+  }
+  const ref = await completeRef(base)
+  const sessionId = String(api.url.searchParams.get('sessionId') ?? '')
+  try {
+    const value = await api.ctx.sessionController.attachment({ attachment: ref })
+    api.json(200, {
+      mediaType: value?.attachment?.mediaType ?? ref.mediaType ?? 'image/png',
+      data: value?.data ?? '',
+      name: value?.attachment?.name ?? ref.name,
+      width: value?.attachment?.width ?? ref.width,
+      height: value?.attachment?.height ?? ref.height,
+    })
+  } catch (error) {
+    api.json(404, { error: `附件读取失败：${String(error?.message ?? error)}` })
+  }
+  return true
+}
+
 export async function handle (api) {
   // Balance and usage live in their own module: the routes, the parsers and the stored keys together.
   if (await usageRoutes(api)) return true
@@ -912,6 +1023,7 @@ export async function handle (api) {
   if (await fileRoutes(api)) return true
   const method = api.request.method
   if (method === 'GET') {
+    if (api.url.pathname === '/api/attachment') return await attachmentImage(api)
     if (api.url.pathname === '/api/presets') return await presets(api)
     if (api.url.pathname === '/api/dsh/info') return dshInfo(api)
     return false
