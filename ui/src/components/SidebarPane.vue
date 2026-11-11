@@ -4,6 +4,7 @@ import {
   createSession,
   forkSession,
   groupedSessions,
+  workspaceTreeOf,
   isPinned,
   renameSession,
   selectSession,
@@ -21,7 +22,55 @@ import ComboBox from './ComboBox.vue'
 
 const emit = defineEmits(['select', 'close'])
 
+/**
+ * @param roots - the workspace tree.
+ * @param collapsed - ids whose children are hidden.
+ * @param forceOpen - true while searching, so a match is never hidden inside a collapsed branch.
+ * @returns one flat row list, each carrying its depth, which a single `v-for` can render.
+ *
+ * Flattening rather than nesting components keeps the render cost flat and the indentation explicit; the
+ * tree only decides the order and the depth.
+ */
+function flattenWorkspaces (roots, collapsed, forceOpen) {
+  const rows = []
+  const walk = (nodes, depth) => {
+    for (const node of nodes) {
+      rows.push({ ...node, depth, hasChildren: node.children.length > 0, folded: collapsed.includes(node.id) })
+      if (forceOpen || !collapsed.includes(node.id)) walk(node.children, depth + 1)
+    }
+  }
+  walk(roots, 0)
+  return rows
+}
+
 const COLLAPSE_KEY = 'rc.collapsed'
+/** Workspaces whose children are folded away; separate from the per-group session collapse. */
+const WS_COLLAPSE_KEY = 'rc.wsCollapsed'
+const collapsedWorkspaces = ref(readWsCollapsed())
+
+/** @returns the persisted folded workspace ids. */
+/** Fold or unfold one workspace branch and remember it. */
+function toggleWorkspace (id) {
+  const folded = collapsedWorkspaces.value.includes(id)
+  collapsedWorkspaces.value = folded
+    ? collapsedWorkspaces.value.filter((candidate) => candidate !== id)
+    : [...collapsedWorkspaces.value, id]
+  try {
+    window.localStorage.setItem(WS_COLLAPSE_KEY, JSON.stringify(collapsedWorkspaces.value))
+  } catch {
+    /* a blocked storage keeps the in-memory state */
+  }
+}
+
+function readWsCollapsed () {
+  try {
+    const raw = window.localStorage.getItem(WS_COLLAPSE_KEY)
+    const parsed = raw === null ? [] : JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
 const query = ref('')
 
 /** Collapsed workspace ids, stored as a plain array so a malformed value can never break setup. */
@@ -130,9 +179,16 @@ function collapseGroup (id) {
 const view = computed(() => {
   const needle = query.value.trim().toLowerCase()
   const all = groupedSessions.value
-  if (needle === '') return all
+  if (needle === '') {
+    // No search: render the tree. Rows carry their depth so one v-for can express the indent.
+    return {
+      ...all,
+      rows: flattenWorkspaces(workspaceTreeOf(all.groups), collapsedWorkspaces.value, false),
+    }
+  }
   const matches = (session) => `${session.title ?? ''} ${session.id}`.toLowerCase().includes(needle)
   return {
+    rows: [],
     groups: all.groups
       .map((group) => ({ ...group, sessions: group.sessions.filter(matches) }))
       .filter((group) => group.sessions.length > 0),
@@ -388,13 +444,27 @@ function entriesFor (session) {
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-2" @click.self="menuFor = undefined">
-      <div v-for="group in view.groups" :key="group.id" class="mt-2 first:mt-0">
+      <div
+        v-for="group in (view.rows.length > 0 ? view.rows : view.groups)"
+        :key="group.id"
+        class="relative mt-1 first:mt-0"
+      >
+        <!--
+          Indentation without a phantom absolute box: the padding shifts the whole row, and the guide is drawn
+          from that padding's own border, so the rail always sits exactly at the parent's content edge — no
+          positioning context needed, and it cannot drift when the row grows.
+        -->
+        <div
+          class="tree-branch"
+          :style="group.depth > 0 ? { '--tree-depth': group.depth } : undefined"
+          :class="group.depth > 0 ? 'tree-branch-nested' : ''"
+        >
         <!-- Workspace level: bigger, bolder, clearly the parent of the rows below. -->
         <button
           type="button"
           class="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-fill-chip"
-          :aria-expanded="!isCollapsed(group.id)"
-          @click="toggle(group.id)"
+          :aria-expanded="group.hasChildren === true ? group.folded !== true : !isCollapsed(group.id)"
+          @click="group.hasChildren === true ? toggleWorkspace(group.id) : toggle(group.id)"
         >
           <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-b from-white/80 to-white/40 text-secondary shadow-[0_2px_8px_-6px_rgb(15_23_42/0.6)] dark:from-white/[0.14] dark:to-white/[0.06] text-muted">
             <AppIcon name="layers" :size="13" />
@@ -414,14 +484,14 @@ function entriesFor (session) {
             name="chevron"
             :size="13"
             class="shrink-0 text-tertiary transition-transform duration-200"
-            :class="isCollapsed(group.id) ? '-rotate-90' : ''"
+            :class="(group.hasChildren === true ? group.folded === true : isCollapsed(group.id)) ? '-rotate-90' : ''"
           />
         </button>
 
         <!-- Session level: indented behind a guide line so the hierarchy reads at a glance. -->
         <div
           v-if="!isCollapsed(group.id)"
-          class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5 dark:border-white/10"
+          class="session-rail mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5"
         >
           <div
             v-for="session in visibleSessions(group)"
@@ -492,6 +562,7 @@ function entriesFor (session) {
           </button>
         </div>
       </div>
+        </div>
 
       <!-- Archived Sessions: hidden by default, folded open on demand, unarchivable in place. -->
       <div v-if="view.archived.length > 0" class="mt-3">
@@ -505,7 +576,7 @@ function entriesFor (session) {
           <span class="flex-1">已归档</span>
           <span class="rounded-full bg-fill-tint px-1.5 text-[10px]">{{ view.archived.length }}</span>
         </button>
-        <div v-if="archivedOpen" class="mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5 dark:border-white/10">
+        <div v-if="archivedOpen" class="session-rail mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5">
           <div
             v-for="session in view.archived"
             :key="session.id"

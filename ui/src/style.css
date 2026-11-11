@@ -1828,3 +1828,47 @@ body {
   border-top: 1px solid var(--outline-variant);
 }
 
+/* Workspace tree rail.
+
+   The indent is padding on the row, and the rail is that padding's left border, so the line lands exactly on
+   the parent's content edge at every depth — no absolute positioning, nothing to measure, and it stays put
+   when the row's height changes. The line is drawn only on nested rows. */
+
+/* One rail value for both rails.
+
+   The workspace tree rail and the session list rail are drawn by different elements — the tree by a padding
+   border on the row, the session list by `border-l` on a nested block 1.15rem in. If each picks its own offset
+   the two lines land a few pixels apart, which is what the screenshot showed. Both now start at the same
+   place: the row's own content edge plus the same 4px, so a child workspace's rail lines up with its parent's
+   session rail. */
+
+/* The session rail inside a workspace uses the same colour, so the two never read as different weights. */
+.session-rail {
+  border-left-color: var(--outline-variant);
+}
+
+/* Workspace tree.
+
+   One step value drives both the indent and the rail, and the rail is a pseudo-element placed at an exact x —
+   not a border, which is welded to its own box and therefore always needed a hand-tuned offset. The step is
+   the same 1.15rem the session list uses, so a child workspace's rail and its parent's session rail are on the
+   same axis by construction rather than by arithmetic that has to stay in sync. */
+.tree-branch-nested {
+  position: relative;
+  padding-left: calc(var(--tree-depth, 1) * 1.15rem);
+}
+
+.tree-branch-nested::before {
+  content: '';
+  position: absolute;
+  /* Exactly the session rail's left edge. The earlier -1px compensated for a border that is no longer used,
+     and it was the visible remainder of the misalignment. */
+  left: calc(var(--tree-depth, 1) * 1.15rem);
+  /* Bleed one row-gap past both ends: the rows carry `mt-1`, so a rail that stops at the box edge leaves a
+     4px break between siblings. The bleed joins them into one continuous line. */
+  top: -0.25rem;
+  bottom: -0.25rem;
+  border-left: 1px solid var(--outline-variant);
+  pointer-events: none;
+}
+
