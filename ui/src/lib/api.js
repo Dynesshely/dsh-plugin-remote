@@ -1,3 +1,4 @@
+import { t } from './i18n.js'
 import { createJsonParser, createStreamParser } from './worker-client.js'
 
 /**
@@ -9,6 +10,20 @@ import { createJsonParser, createStreamParser } from './worker-client.js'
  */
 
 /** Thrown when the Host rejects the request because the cookie is missing or stale. */
+/**
+ * @param key - a dictionary key for the message.
+ * @returns an error flagged as a cancellation.
+ *
+ * The store has to tell "the user cancelled" from "something failed", and wording is the worst possible signal
+ * for that: a translated message never matches a literal, and a reworded one silently stops matching. The flag
+ * travels with the error instead of being encoded in its text.
+ */
+function cancelledError (key) {
+  const error = new Error(t(key))
+  error.cancelled = true
+  return error
+}
+
 export class UnauthorizedError extends Error {
   constructor () {
     super('unauthorized')
@@ -104,7 +119,7 @@ function routeOf (path) {
 async function parseResponseBody (text, project) {
   const { value, error } = await createJsonParser().parse(text, { project, chunkChars: TRANSFER_CHUNK_CHARS })
   // 失败一定要变成一条可读的 Error 抛给调用方，而不是让 SyntaxError 自己往上冒。
-  if (error !== undefined) throw new Error(`响应解析失败：${error}`)
+  if (error !== undefined) throw new Error(t('misc.responseParseFailed', { reason: String(error) }))
   return value
 }
 
@@ -122,16 +137,16 @@ export async function api (path, options = {}) {
     response = await fetch(path, init)
   } catch (error) {
     // Distinguish the three cases a caller cares about: cancelled, timed out, never reached the Host.
-    if (options.signal?.aborted === true) throw new Error('已取消')
-    if (error?.name === 'TimeoutError') throw new Error('请求超时，请重试')
-    if (error?.name === 'AbortError') throw new Error('已取消')
-    throw new Error('无法连接到宿主，请检查网络')
+    if (options.signal?.aborted === true) throw cancelledError('error.cancelled')
+    if (error?.name === 'TimeoutError') throw new Error(t('error.timeout'))
+    if (error?.name === 'AbortError') throw cancelledError('error.cancelled')
+    throw new Error(t('error.offline'))
   }
   if (response.status === 401) throw new UnauthorizedError()
   const text = await response.text()
   // 上限必须在解析之前判断：一旦交给 JSON.parse，这份卡顿就已经花掉了。
   if (text.length > MAX_RESPONSE_CHARS) {
-    throw new Error(`响应过大（${(text.length / (1024 * 1024)).toFixed(1)} MB），已拒绝解析`)
+    throw new Error(t('misc.responseTooLarge', { size: (text.length / (1024 * 1024)).toFixed(1) }))
   }
   const payload = text === '' ? {} : await parseResponseBody(text, options.project ?? PROJECTIONS[routeOf(path)])
   // 用 `?.` 是因为合法 JSON 也可能是 `null`：那不该变成一条 TypeError。
@@ -166,10 +181,10 @@ export async function uploadImage (source, options = {}) {
       signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals),
     })
   } catch (error) {
-    if (options.signal?.aborted === true) throw new Error('已取消')
-    if (error?.name === 'TimeoutError') throw new Error('图片上传超时，请重试')
-    if (error?.name === 'AbortError') throw new Error('已取消')
-    throw new Error('无法连接到宿主，请检查网络')
+    if (options.signal?.aborted === true) throw cancelledError('error.cancelled')
+    if (error?.name === 'TimeoutError') throw new Error(t('error.uploadTimeout'))
+    if (error?.name === 'AbortError') throw cancelledError('error.cancelled')
+    throw new Error(t('error.offline'))
   }
   if (response.status === 401) throw new UnauthorizedError()
   const text = await response.text()
@@ -192,7 +207,7 @@ export async function login (token) {
     body: JSON.stringify({ token }),
     signal: AbortSignal.timeout(15_000),
   })
-  if (!response.ok) throw new Error('令牌不正确')
+  if (!response.ok) throw new Error(t('error.badToken'))
 }
 
 /** @returns whether a `?k=` token was present, after consuming it into a cookie. */
@@ -307,7 +322,7 @@ export function openStream (sessionId, handlers) {
     } catch (error) {
       // A frame that cannot be read has to be said out loud: keeping the previous transcript in silence is
       // exactly how a Session ends up looking empty.
-      handlers.onError?.('数据帧解析失败（' + String(event.data.length) + ' 字节）：' + String(error?.message ?? error))
+      handlers.onError?.(t('error.frameParse', { bytes: event.data.length, reason: String(error?.message ?? error) }))
     }
   })
   source.addEventListener('pending', (event) => {
@@ -327,7 +342,7 @@ export function openStream (sessionId, handlers) {
   source.onerror = () => {
     // 浏览器会自己重连，所以这里只报状态，不触发任何重新加载：上层拿到消息只更新提示，
     // 真正的快照去重发生在 store 的 handleFrame 里。
-    handlers.onError?.('连接中断，正在重连…')
+    handlers.onError?.(t('error.reconnecting'))
   }
   // 关掉连接时顺手封死队列，见 `closed` 的说明。
   const nativeClose = source.close.bind(source)

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { selectedSession } from '../lib/store.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 
 /**
@@ -47,7 +48,7 @@ const icon = computed(() => ICONS[kind.value] ?? ICONS.unknown)
 const description = computed(() => {
   const given = String(props.file?.description ?? '').trim()
   if (given !== '') return given
-  return extension.value === '' ? '文件' : `${extension.value} 文件`
+  return extension.value === '' ? t('filecard.file') : t('filecard.fileWithExt', { ext: extension.value })
 })
 
 /** 缩略图与预览都走同一条宿主图片路由。 */
@@ -176,12 +177,12 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- 右：主操作 + 下拉 -->
-    <button type="button" class="rc-file-primary shrink-0" @click="preview">预览</button>
+    <button type="button" class="rc-file-primary shrink-0" @click="preview">{{ t('composer.preview') }}</button>
     <div class="relative shrink-0">
       <button
         type="button"
         class="rc-file-more flex h-6 w-6 items-center justify-center rounded-lg text-tertiary hover:text-zinc-600 dark:hover:text-zinc-200"
-        aria-label="更多操作"
+        :aria-label="t('filecard.more')"
         :aria-expanded="menuOpen"
         data-file-menu-toggle="1"
         @click="toggleMenu"
@@ -199,11 +200,11 @@ onBeforeUnmount(() => {
           :href="downloadUrl"
           :download="name"
           @click="closeMenu"
-        >下载</a>
+        >{{ t('action.download') }}</a>
         <button type="button" class="rc-file-menu-item" @click="copyPath(); closeMenu()">
-          {{ copied ? '已复制路径' : '复制路径' }}
+          {{ copied ? t('filecard.copiedPath') : t('filecard.copyPath') }}
         </button>
-        <button type="button" class="rc-file-menu-item" @click="revealInFileManager">在文件浏览器中打开</button>
+        <button type="button" class="rc-file-menu-item" @click="revealInFileManager">{{ t('filecard.openInExplorer') }}</button>
       </div>
     </div>
 
@@ -227,7 +228,7 @@ onBeforeUnmount(() => {
               <p class="truncate text-[12px] font-medium text-strong">{{ name }}</p>
               <p class="truncate text-[10px] text-tertiary">{{ path }}</p>
             </div>
-            <button type="button" class="rc-file-close" aria-label="关闭预览" @click="closePreview">✕</button>
+            <button type="button" class="rc-file-close" :aria-label="t('filecard.closePreview')" @click="closePreview">✕</button>
           </div>
           <div class="min-h-0 flex-1 overflow-auto bg-black/5 p-2 dark:bg-black/40">
             <img
@@ -240,12 +241,12 @@ onBeforeUnmount(() => {
             <div v-else class="flex flex-col items-center gap-2 px-4 py-10 text-center">
               <AppIcon :name="icon" :size="26" class="text-tertiary" />
               <p class="text-[12px] text-secondary-strong">
-                {{ isImage ? '图片加载失败' : '该类型暂不支持页面内预览' }}
+                {{ isImage ? t('filecard.imageFailed') : t('filecard.unsupportedPreview') }}
               </p>
               <p class="max-w-full truncate text-[11px] text-tertiary">{{ path }}</p>
               <div class="flex flex-wrap items-center justify-center gap-2 pt-1">
-                <button type="button" class="rc-file-primary" @click="revealInFileManager">用文件浏览器打开</button>
-                <button type="button" class="rc-file-ghost" @click="copyPath">{{ copied ? '已复制路径' : '复制路径' }}</button>
+                <button type="button" class="rc-file-primary" @click="revealInFileManager">{{ t('filecard.openWithExplorer') }}</button>
+                <button type="button" class="rc-file-ghost" @click="copyPath">{{ copied ? t('filecard.copiedPath') : t('filecard.copyPath') }}</button>
               </div>
             </div>
           </div>

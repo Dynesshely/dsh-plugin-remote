@@ -5,6 +5,7 @@ import { codeHtml } from '../lib/highlight.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { mobileLayout as mobile } from '../lib/layout.js'
 import { state } from '../lib/store.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
 
@@ -12,10 +13,10 @@ import ComboBox from './ComboBox.vue'
  * The name shown above the panel's own controls.
  *
  * Passed in rather than hard-coded: the tab strip already knows what this tab hosts, and two different names
- * for one panel is how the header and the tab drift apart.
+ * for one panel is how the header and the tab drift apart. An empty title falls back to the localised default.
  */
 const props = defineProps({
-  title: { type: String, default: '文件资源管理器' },
+  title: { type: String, default: '' },
 })
 
 /**
@@ -112,7 +113,7 @@ const crumbs = computed(() => {
   const relative = normalisePath(path.value)
   if (root === '') {
     // No workspace path known: fall back to the relative trail, still showing every segment.
-    const trail = [{ name: listing.value?.root?.name ?? '工作区', path: '', absolute: '', inside: true }]
+    const trail = [{ name: listing.value?.root?.name ?? t('files.workspace'), path: '', absolute: '', inside: true }]
     let accumulated = ''
     for (const segment of relative.split('/').filter((part) => part !== '')) {
       accumulated = accumulated === '' ? segment : `${accumulated}/${segment}`
@@ -202,7 +203,7 @@ async function commitPathEdit () {
   const target = resolvePath(pathDraft.value)
   editingPath.value = false
   if (target === undefined) {
-    error.value = `无法定位：${pathDraft.value} 不在任何工作区内`
+    error.value = t('files.locateFailed', { path: pathDraft.value })
     return
   }
   error.value = ''
@@ -538,7 +539,7 @@ function openPrompt (title, initial, confirmLabel, onConfirm) {
  * @param onConfirm - called when the reader agrees.
  */
 function openConfirm (message, onConfirm) {
-  ask.value = { mode: 'confirm', title: '请确认', message, confirmLabel: '删除', onConfirm }
+  ask.value = { mode: 'confirm', title: t('files.confirmTitle'), message, confirmLabel: t('action.delete'), onConfirm }
 }
 
 /** Apply the pending dialog. */
@@ -576,7 +577,7 @@ async function mutate (action, body) {
 
 /** Create a folder or an empty file in the current directory. */
 function create (kind) {
-  openPrompt(kind === 'dir' ? '新建文件夹' : '新建文件', '', '创建', (name) => {
+  openPrompt(kind === 'dir' ? t('files.newFolder') : t('files.newFile'), '', t('files.create'), (name) => {
     const target = path.value === '' ? name : `${path.value}/${name}`
     void mutate(kind === 'dir' ? 'mkdir' : 'create', { path: target })
   })
@@ -586,7 +587,7 @@ function create (kind) {
 function renameSelected () {
   const entry = selectedEntries.value.length === 1 ? selectedEntries.value[0] : undefined
   if (entry === undefined) return
-  openPrompt('重命名', entry.name, '确定', (name) => {
+  openPrompt(t('files.rename'), entry.name, t('action.confirm'), (name) => {
     if (name === entry.name) return
     const to = path.value === '' ? name : `${path.value}/${name}`
     void mutate('rename', { path: entryPath(entry), to })
@@ -598,9 +599,9 @@ async function deleteSelected () {
   const entries = selectedEntries.value
   if (entries.length === 0) return
   const label = entries.length === 1
-    ? `${entries[0].kind === 'dir' ? '文件夹及其全部内容' : '文件'}「${entries[0].name}」`
-    : `${String(entries.length)} 个条目`
-  openConfirm(`删除${label}？这个操作不可撤销。`, () => {
+    ? t(entries[0].kind === 'dir' ? 'files.deleteTargetDir' : 'files.deleteTargetFile', { name: entries[0].name })
+    : t('files.deleteTargets', { count: entries.length })
+  openConfirm(t('files.confirmDelete', { target: label }), () => {
     void (async () => {
       for (const entry of entries) {
         await mutate('delete', { path: entryPath(entry), recursive: entry.kind === 'dir' })
@@ -772,10 +773,10 @@ async function uploadOne (file) {
       signal: AbortSignal.timeout(120_000),
     })
   } catch (problem) {
-    if (problem?.name === 'TimeoutError') throw new Error('请求超时，请重试')
-    throw new Error('无法连接到宿主，请检查网络')
+    if (problem?.name === 'TimeoutError') throw new Error(t('files.timeout'))
+    throw new Error(t('files.unreachable'))
   }
-  if (response.status === 401) throw new Error('登录已失效，请重新打开带令牌的链接')
+  if (response.status === 401) throw new Error(t('files.unauthorized'))
   if (!response.ok) throw new Error(await failureText(response))
 }
 
@@ -793,7 +794,7 @@ async function upload (input) {
       try {
         await uploadOne(file)
       } catch (problem) {
-        if (failure === '') failure = `${file.name} 上传失败：${String(problem?.message ?? problem)}`
+        if (failure === '') failure = t('files.uploadFailed', { name: file.name, reason: String(problem?.message ?? problem) })
       }
     }
   } finally {
@@ -841,11 +842,11 @@ watch(() => state.selected, () => {
   <div class="file-pane relative flex h-full min-h-0 flex-col" :class="fullscreen ? 'fixed inset-0 z-[135] bg-white/95 p-3 backdrop-blur-xl bg-fill-solid' : ''">
     <!-- Title line: the panel's name and its own two actions. -->
     <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-1">
-      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">{{ title }}</span>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="回到当前会话的工作区" @click="jumpToSession">
+      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">{{ title === '' ? t('files.title') : title }}</span>
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('files.jumpToSession')" @click="jumpToSession">
         <AppIcon name="pin" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="刷新" @click="reload">
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('action.refresh')" @click="reload">
         <AppIcon name="refresh" :size="13" />
       </button>
     </header>
@@ -872,42 +873,42 @@ watch(() => state.selected, () => {
       </div>
       <div class="min-w-2 flex-1" />
       <!-- Icon-only: the panel is narrow, and labelled chips would push the selector off the row. -->
-      <button class="icon-btn h-7 w-7" type="button" title="新建文件夹" aria-label="新建文件夹" :disabled="busy !== ''" @click="create('dir')">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFolder')" :aria-label="t('files.newFolder')" :disabled="busy !== ''" @click="create('dir')">
         <AppIcon name="folder" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7" type="button" title="新建文件" aria-label="新建文件" :disabled="busy !== ''" @click="create('file')">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFile')" :aria-label="t('files.newFile')" :disabled="busy !== ''" @click="create('file')">
         <AppIcon name="file" :size="13" />
       </button>
       <label
         class="icon-btn h-7 w-7 cursor-pointer"
         :class="busy !== '' ? 'pointer-events-none opacity-40' : ''"
-        title="上传文件"
-        aria-label="上传文件"
+        :title="t('files.upload')"
+        :aria-label="t('files.upload')"
       >
         <AppIcon name="paperclip" :size="13" />
         <input type="file" multiple class="hidden" :disabled="busy !== ''" @change="upload($event.target)" />
       </label>
       <span class="mx-0.5 h-4 w-px shrink-0 bg-outline-variant" />
-      <button class="icon-btn h-7 w-7" type="button" title="重命名" aria-label="重命名" :disabled="busy !== '' || selection.size !== 1" @click="renameSelected">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('action.rename')" :aria-label="t('action.rename')" :disabled="busy !== '' || selection.size !== 1" @click="renameSelected">
         <AppIcon name="pencil" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7" type="button" title="复制" aria-label="复制" :disabled="busy !== '' || !hasSelection" @click="clipSelected('copy')">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('action.copy')" :aria-label="t('action.copy')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('copy')">
         <AppIcon name="copy" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7" type="button" title="剪切" aria-label="剪切" :disabled="busy !== '' || !hasSelection" @click="clipSelected('move')">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('action.cut')" :aria-label="t('action.cut')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('move')">
         <AppIcon name="cut" :size="13" />
       </button>
       <button
         class="icon-btn h-7 w-7"
         type="button"
-        :title="clip === undefined ? '粘贴（剪贴板为空）' : `粘贴 ${String(clip.items.length)} 项`"
-        aria-label="粘贴"
+        :title="clip === undefined ? t('files.pasteEmpty') : t('files.pasteCount', { count: clip.items.length })"
+        :aria-label="t('action.paste')"
         :disabled="busy !== '' || clip === undefined"
         @click="pasteHere"
       >
         <AppIcon name="file" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7 text-danger" type="button" title="删除" aria-label="删除" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
+      <button class="icon-btn h-7 w-7 text-danger" type="button" :title="t('action.delete')" :aria-label="t('action.delete')" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
         <AppIcon name="trash" :size="13" />
       </button>
     </div>
@@ -937,8 +938,8 @@ watch(() => state.selected, () => {
         <button
           class="icon-btn h-7 w-7 shrink-0"
           type="button"
-          title="上一级目录"
-          aria-label="上一级目录"
+          :title="t('files.upDir')"
+          :aria-label="t('files.upDir')"
           :disabled="!canGoUp"
           @click="goUp"
         >
@@ -947,8 +948,8 @@ watch(() => state.selected, () => {
         <button
           class="icon-btn h-7 w-7 shrink-0"
           type="button"
-          title="返回"
-          aria-label="返回"
+          :title="t('files.back')"
+          :aria-label="t('files.back')"
           :disabled="!canGoBack"
           @click="goBack"
         >
@@ -957,8 +958,8 @@ watch(() => state.selected, () => {
         <button
           class="icon-btn h-7 w-7 shrink-0"
           type="button"
-          title="前进"
-          aria-label="前进"
+          :title="t('files.forward')"
+          :aria-label="t('files.forward')"
           :disabled="!canGoForward"
           @click="goForward"
         >
@@ -999,7 +1000,7 @@ watch(() => state.selected, () => {
           class="h-6 min-w-0 flex-1 border-0 bg-transparent px-1 font-mono text-[11px] text-strong outline-none"
           spellcheck="false"
           autocomplete="off"
-          placeholder="输入绝对路径后回车"
+          :placeholder="t('files.pathPlaceholder')"
           @keydown.enter.prevent="commitPathEdit"
           @keydown.esc.prevent="cancelPathEdit"
           @blur="cancelPathEdit"
@@ -1007,7 +1008,7 @@ watch(() => state.selected, () => {
       </div>
     </div>
     <p v-if="clip !== undefined" class="shrink-0 truncate px-1.5 pb-1 text-[10px] text-tertiary">
-      {{ clip.mode === 'copy' ? '已复制' : '已剪切' }} {{ String(clip.items.length) }} 项
+      {{ clip.mode === 'copy' ? t('files.clipCopy', { count: clip.items.length }) : t('files.clipCut', { count: clip.items.length }) }}
     </p>
 
 
@@ -1019,19 +1020,19 @@ watch(() => state.selected, () => {
             {{ preview.name }}
           </span>
           <span class="shrink-0 text-[10px] text-tertiary">{{ formatSize(preview.size) }}</span>
-          <a class="icon-btn h-6 w-6" :href="rawUrl(preview.path)" download :title="'下载'">
+          <a class="icon-btn h-6 w-6" :href="rawUrl(preview.path)" download :title="t('action.download')">
             <AppIcon name="download" :size="12" />
           </a>
-          <button class="icon-btn h-6 w-6" type="button" :title="fullscreen ? '退出全屏' : '全屏'" @click="fullscreen = !fullscreen">
+          <button class="icon-btn h-6 w-6" type="button" :title="fullscreen ? t('files.exitFullscreen') : t('files.fullscreen')" @click="fullscreen = !fullscreen">
             <AppIcon name="spark" :size="12" />
           </button>
-          <button class="icon-btn h-6 w-6" type="button" title="关闭预览" @click="preview = undefined; fullscreen = false">
+          <button class="icon-btn h-6 w-6" type="button" :title="t('files.closePreview')" @click="preview = undefined; fullscreen = false">
             <AppIcon name="close" :size="12" />
           </button>
         </div>
 
         <div class="min-h-0 flex-1 overflow-auto">
-          <p v-if="preview.loading" class="px-1 py-3 text-[11px] text-tertiary">正在载入预览…</p>
+          <p v-if="preview.loading" class="px-1 py-3 text-[11px] text-tertiary">{{ t('files.loadingPreview') }}</p>
           <img v-else-if="preview.kind === 'image'" :src="preview.src" alt="" class="max-h-full w-full rounded-xl object-contain" />
           <video v-else-if="preview.kind === 'video'" :src="preview.src" controls class="max-h-full w-full rounded-xl" />
           <audio v-else-if="preview.kind === 'audio'" :src="preview.src" controls class="w-full" />
@@ -1048,9 +1049,9 @@ watch(() => state.selected, () => {
           </div>
           <div v-else-if="preview.kind === 'html'" class="md break-words" :class="preview.name.endsWith('.md') || preview.name.endsWith('.markdown') ? '' : 'sheet-preview'" v-html="preview.html" />
           <p v-else class="rounded-xl bg-white/40 p-2 text-[11px] text-tertiary dark:bg-white/5">
-            {{ preview.error ?? '无法预览这个文件，可以下载后查看。' }}
+            {{ preview.error ?? t('files.cannotPreview') }}
           </p>
-          <p v-if="preview.truncated" class="mt-1 text-[10px] text-tertiary">内容较长，仅显示前面一部分。</p>
+          <p v-if="preview.truncated" class="mt-1 text-[10px] text-tertiary">{{ t('files.truncatedContent') }}</p>
         </div>
       </div>
 
@@ -1060,14 +1061,14 @@ watch(() => state.selected, () => {
         </div>
         <div v-else-if="error !== ''" class="px-1 pt-2">
           <p class="mb-2 text-[11px] text-danger">{{ error }}</p>
-          <button class="chip" type="button" @click="open(path)">重试</button>
+          <button class="chip" type="button" @click="open(path)">{{ t('action.retry') }}</button>
         </div>
         <p v-else-if="(listing?.entries ?? []).length === 0" class="px-2 py-6 text-center text-[11px] text-tertiary">
-          这个目录是空的。
+          {{ t('files.emptyDir') }}
         </p>
         <!-- Selection summary, so multi-select is visible without counting highlighted rows. -->
         <p v-if="hasSelection" class="shrink-0 px-1.5 pt-1 pb-0.5 text-[10px] text-tertiary">
-          已选中 {{ selection.size }} 项
+          {{ t('files.selected', { count: selection.size }) }}
         </p>
         <!--
           The whole box is the drag surface: a rubber band may start in the gutter to the left of the rows or in
@@ -1117,7 +1118,7 @@ watch(() => state.selected, () => {
           />
         </div>
         <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on">
-          条目过多，仅显示前面一部分。
+          {{ t('files.tooMany') }}
         </p>
 
         <!--
@@ -1134,29 +1135,29 @@ watch(() => state.selected, () => {
             >
               <button type="button" class="file-menu-item" @click="runMenu((entry) => activate(entry))">
                 <AppIcon :name="menu.entry.kind === 'dir' ? 'folder' : 'file'" :size="12" />
-                <span>{{ menu.entry.kind === 'dir' ? '打开文件夹' : '预览' }}</span>
+                <span>{{ menu.entry.kind === 'dir' ? t('files.openFolder') : t('composer.preview') }}</span>
               </button>
               <button v-if="menu.entry.kind === 'file'" type="button" class="file-menu-item" @click="runMenu((entry) => downloadEntry(entry))">
                 <AppIcon name="download" :size="12" />
-                <span>下载</span>
+                <span>{{ t('action.download') }}</span>
               </button>
               <div class="file-menu-separator" />
               <button type="button" class="file-menu-item" @click="runMenu(() => renameSelected())">
                 <AppIcon name="pencil" :size="12" />
-                <span>重命名</span>
+                <span>{{ t('action.rename') }}</span>
               </button>
               <button type="button" class="file-menu-item" @click="runMenu(() => clipSelected('copy'))">
                 <AppIcon name="copy" :size="12" />
-                <span>复制</span>
+                <span>{{ t('action.copy') }}</span>
               </button>
               <button type="button" class="file-menu-item" @click="runMenu(() => clipSelected('move'))">
                 <AppIcon name="cut" :size="12" />
-                <span>剪切</span>
+                <span>{{ t('action.cut') }}</span>
               </button>
               <div class="file-menu-separator" />
               <button type="button" class="file-menu-item file-menu-danger" @click="runMenu(() => deleteSelected())">
                 <AppIcon name="trash" :size="12" />
-                <span>删除</span>
+                <span>{{ t('action.delete') }}</span>
               </button>
             </div>
           </div>
@@ -1180,13 +1181,13 @@ watch(() => state.selected, () => {
           v-model="ask.value"
           type="text"
           class="field mb-3 w-full py-1 text-[12px]"
-          :placeholder="'名称'"
+          :placeholder="t('files.name')"
           autofocus
           @keydown.enter="submitAsk"
           @keydown.esc="cancelAsk"
         />
         <div class="flex justify-end gap-2">
-          <button class="chip" type="button" @click="cancelAsk">取消</button>
+          <button class="chip" type="button" @click="cancelAsk">{{ t('action.cancel') }}</button>
           <button
             class="chip chip-strong"
             :class="ask.mode === 'confirm' ? 'text-danger' : ''"

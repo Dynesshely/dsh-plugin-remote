@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../lib/api.js'
 import { state } from '../lib/store.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
 
@@ -37,7 +38,7 @@ const patchError = ref('')
 /** @returns the repository choices, labelled by their folder inside the workspace. */
 const repoChoices = computed(() => repos.value.map((entry) => ({
   value: entry.path,
-  name: entry.relative === '' ? `${entry.name}（工作区根）` : entry.relative,
+  name: entry.relative === '' ? t('git.root', { name: entry.name }) : entry.relative,
   description: entry.path,
 })))
 
@@ -71,15 +72,15 @@ const stagedCount = computed(() => files.value.filter((file) => file.index !== '
  * staged, ` M` is not, `MM` is both.
  */
 function describe (file) {
-  if (file.conflicted === true) return { label: '冲突', tone: 'text-danger' }
-  if (file.untracked === true) return { label: '新增', tone: 'text-success' }
-  if (file.index === 'R' || file.worktree === 'R') return { label: '重命名', tone: 'text-primary' }
-  if (file.index === 'D' || file.worktree === 'D') return { label: '删除', tone: 'text-danger' }
+  if (file.conflicted === true) return { label: t('git.conflicted'), tone: 'text-danger' }
+  if (file.untracked === true) return { label: t('git.added'), tone: 'text-success' }
+  if (file.index === 'R' || file.worktree === 'R') return { label: t('git.renamed'), tone: 'text-primary' }
+  if (file.index === 'D' || file.worktree === 'D') return { label: t('git.deleted'), tone: 'text-danger' }
   const staged = file.index !== '.' && file.index !== ' '
   const worktree = file.worktree !== '.' && file.worktree !== ' '
-  if (staged && worktree) return { label: '已暂存+未暂存', tone: 'text-warning-on' }
-  if (staged) return { label: '已暂存', tone: 'text-primary' }
-  return { label: '未暂存', tone: 'text-warning-on' }
+  if (staged && worktree) return { label: t('git.stagedAndUnstaged'), tone: 'text-warning-on' }
+  if (staged) return { label: t('git.staged'), tone: 'text-primary' }
+  return { label: t('git.unstaged'), tone: 'text-warning-on' }
 }
 
 /**
@@ -152,7 +153,7 @@ async function showPatch (file) {
     })
     if (repo.value !== '') query.set('repo', repo.value)
     const payload = await api(`/api/git/diff?${query.toString()}`, { timeoutMs: 20_000 })
-    if (payload.ok === false) patchError.value = String(payload.error ?? '无法读取差异')
+    if (payload.ok === false) patchError.value = String(payload.error ?? t('git.diffFailed'))
     else patch.value = String(payload.patch ?? '')
   } catch (problem) {
     patchError.value = String(problem.message ?? problem)
@@ -193,8 +194,8 @@ onMounted(async () => {
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-1">
-      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">Git 状态</span>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="刷新" @click="load">
+      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">{{ t('container.git') }}</span>
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('action.refresh')" @click="load">
         <AppIcon name="refresh" :size="13" />
       </button>
     </header>
@@ -221,16 +222,16 @@ onMounted(async () => {
           @update:model-value="switchRepo"
         />
       </div>
-      <span v-else-if="!loading" class="min-w-0 flex-1 truncate text-[10px] text-tertiary">未发现 Git 仓库</span>
+      <span v-else-if="!loading" class="min-w-0 flex-1 truncate text-[10px] text-tertiary">{{ t('git.noRepos') }}</span>
     </div>
 
     <p v-if="error !== ''" class="shrink-0 px-2 pb-1 text-[11px] text-danger">{{ error }}</p>
-    <p v-if="loading" class="shrink-0 px-2 pb-1 text-[11px] text-tertiary">读取中…</p>
+    <p v-if="loading" class="shrink-0 px-2 pb-1 text-[11px] text-tertiary">{{ t('git.reading') }}</p>
 
     <!-- Not a repository: a normal answer, not a failure. -->
     <div v-else-if="status !== undefined && status.isRepo === false" class="px-3 py-6 text-center">
       <AppIcon name="layers" :size="20" class="mx-auto mb-2 text-tertiary opacity-60" />
-      <p class="text-[12px] text-secondary">{{ status.reason ?? '这个工作区不在 Git 仓库中' }}</p>
+      <p class="text-[12px] text-secondary">{{ status.reason ?? t('git.notRepo') }}</p>
     </div>
 
     <p v-else-if="status !== undefined && status.ok === false" class="px-2 py-4 text-[11px] text-danger">
@@ -242,8 +243,8 @@ onMounted(async () => {
       <div class="shrink-0 px-2 pb-1.5">
         <div class="flex items-center gap-1.5">
           <AppIcon name="fork" :size="12" class="shrink-0 text-primary" />
-          <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-strong">{{ status.branch ?? '（无分支）' }}</span>
-          <span v-if="status.detached" class="shrink-0 text-[10px] text-warning-on">分离头指针</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-strong">{{ status.branch ?? t('git.noBranch') }}</span>
+          <span v-if="status.detached" class="shrink-0 text-[10px] text-warning-on">{{ t('git.detached') }}</span>
         </div>
         <p v-if="status.upstream" class="mt-0.5 pl-5 text-[10px] text-tertiary">
           {{ status.upstream }}
@@ -251,21 +252,21 @@ onMounted(async () => {
           <span v-if="status.behind > 0" class="text-warning-on"> ↓{{ status.behind }}</span>
         </p>
         <p class="mt-0.5 pl-5 text-[10px] text-tertiary">
-          {{ files.length }} 项变更 · {{ stagedCount }} 已暂存 · {{ untrackedCount }} 新增
+          {{ t('git.summary', { changed: files.length, staged: stagedCount, untracked: untrackedCount }) }}
         </p>
       </div>
 
       <!-- Patch view -->
       <div v-if="selected !== undefined" class="flex min-h-0 flex-1 flex-col px-1.5 pb-2">
         <div class="mb-1.5 flex shrink-0 items-center gap-1.5">
-          <button class="icon-btn h-6 w-6 shrink-0" type="button" title="返回列表" @click="closePatch">
+          <button class="icon-btn h-6 w-6 shrink-0" type="button" :title="t('git.back')" @click="closePatch">
             <AppIcon name="arrowLeft" :size="12" />
           </button>
           <span class="min-w-0 flex-1 truncate text-[11px] text-secondary" :title="selected.path">{{ selected.path }}</span>
         </div>
-        <p v-if="patchLoading" class="px-2 text-[11px] text-tertiary">读取中…</p>
+        <p v-if="patchLoading" class="px-2 text-[11px] text-tertiary">{{ t('git.reading') }}</p>
         <p v-else-if="patchError !== ''" class="px-2 text-[11px] text-danger">{{ patchError }}</p>
-        <p v-else-if="patch.trim() === ''" class="px-2 text-[11px] text-tertiary">没有可显示的差异。</p>
+        <p v-else-if="patch.trim() === ''" class="px-2 text-[11px] text-tertiary">{{ t('git.noDiff') }}</p>
         <pre v-else class="min-h-0 flex-1 overflow-auto rounded-xl bg-fill-muted px-2 py-1.5 font-mono text-[10px] leading-relaxed"><span
           v-for="(line, index) in patch.split('\n')"
           :key="index"
@@ -276,7 +277,7 @@ onMounted(async () => {
 
       <!-- Changed paths -->
       <div v-else class="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
-        <p v-if="files.length === 0" class="px-2 py-6 text-center text-[11px] text-tertiary">工作区没有未提交的变更。</p>
+        <p v-if="files.length === 0" class="px-2 py-6 text-center text-[11px] text-tertiary">{{ t('git.clean') }}</p>
         <ul v-else class="space-y-0.5">
           <li v-for="file in files" :key="file.path">
             <button

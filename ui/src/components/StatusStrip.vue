@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { state } from '../lib/store.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 
 /** Compact number formatting: 1234 → 1.2k, 1234567 → 1.2M. */
@@ -49,7 +50,7 @@ const ringTone = computed(() => {
     <span
       v-if="occupancy !== undefined"
       class="flex shrink-0 items-center gap-1.5"
-      :title="`上下文占用 ${compact(telemetry.lastInput)} / ${compact(telemetry.contextWindow)}`"
+      :title="t('status.context', { used: compact(telemetry.lastInput), total: compact(telemetry.contextWindow) })"
     >
       <svg width="20" height="20" viewBox="0 0 28 28">
         <circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" stroke-width="3" class="opacity-20" />
@@ -69,7 +70,7 @@ const ringTone = computed(() => {
       {{ occupancy.toFixed(0) }}%
     </span>
 
-    <span class="flex shrink-0 items-center gap-1" title="本步生成速度">
+    <span class="flex shrink-0 items-center gap-1" :title="t('status.speed')">
       <AppIcon name="clock" :size="12" />{{ telemetry.tokensPerSecond > 0 ? telemetry.tokensPerSecond.toFixed(1) : '—' }} tok/s
     </span>
 
@@ -77,16 +78,16 @@ const ringTone = computed(() => {
     <span v-if="telemetry.turn > 0" class="hidden shrink-0 items-center gap-1 sm:flex">
       <AppIcon name="layers" :size="12" />{{ telemetry.turn }}–{{ telemetry.step }}
     </span>
-    <span class="hidden shrink-0 items-center gap-1 sm:flex" title="输入 / 输出 tokens">
+    <span class="hidden shrink-0 items-center gap-1 sm:flex" :title="t('status.tokens')">
       ↑{{ compact(telemetry.totalInput) }} ↓{{ compact(telemetry.totalOutput) }}
     </span>
     <span v-if="telemetry.model" class="hidden shrink-0 items-center gap-1 wide:flex">
       <AppIcon name="cpu" :size="12" /><span class="max-w-[9rem] truncate">{{ telemetry.model }}</span>
     </span>
-    <span class="hidden shrink-0 items-center gap-1 wide:flex" title="缓存读取与命中率">
+    <span class="hidden shrink-0 items-center gap-1 wide:flex" :title="t('status.cache')">
       <AppIcon name="spark" :size="12" />{{ compact(telemetry.totalCacheRead) }} · {{ cacheRate.toFixed(0) }}%
     </span>
-    <span v-if="telemetry.totalReasoning > 0" class="hidden shrink-0 items-center gap-1 wide:flex" title="推理 tokens">
+    <span v-if="telemetry.totalReasoning > 0" class="hidden shrink-0 items-center gap-1 wide:flex" :title="t('status.reasoning')">
       <AppIcon name="brain" :size="12" />{{ compact(telemetry.totalReasoning) }}
     </span>
   </div>

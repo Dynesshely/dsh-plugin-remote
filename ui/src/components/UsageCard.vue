@@ -24,6 +24,7 @@ import {
   windowPercent,
   windowTip,
 } from '../lib/usage.js'
+import { t } from '../lib/i18n.js'
 
 /**
  * 余额与用量卡片。
@@ -409,12 +410,12 @@ onBeforeUnmount(() => {
           </svg>
         </span>
         <AppIcon name="spark" :size="11" class="shrink-0 text-tertiary" />
-        <span class="shrink-0 text-[11px] font-medium whitespace-nowrap text-secondary-strong">用量与余额</span>
+        <span class="shrink-0 text-[11px] font-medium whitespace-nowrap text-secondary-strong">{{ t('usage.title') }}</span>
         <span
           v-if="source === 'gateway'"
           class="shrink-0 rounded-full bg-fill-tint px-1.5 py-px text-[9px] leading-none whitespace-nowrap text-secondary"
         >
-          网关
+          {{ t('usage.gateway') }}
         </span>
         <span
           v-if="!open && summary() !== ''"
@@ -429,19 +430,19 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="flex shrink-0 items-center gap-1 rounded-full bg-fill-tint px-1.5 py-px text-[9px] leading-none whitespace-nowrap text-secondary transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
-          :title="view === 'overview' ? '当前：总览视图（点击或右键切换到详情）' : '当前：详情视图（点击或右键切换到总览）'"
+          :title="view === 'overview' ? t('usage.tipOverview') : t('usage.tipDetail')"
           @click.stop="toggleView"
         >
           <AppIcon :name="view === 'overview' ? 'layers' : 'info'" :size="9" />
-          <span>{{ view === 'overview' ? '总览' : '详情' }}</span>
+          <span>{{ view === 'overview' ? t('usage.overview') : t('usage.detail') }}</span>
         </button>
         <span
           class="shrink-0 text-[10px] text-tertiary transition-colors hover:text-zinc-600 dark:hover:text-zinc-200"
           :class="loading ? 'opacity-40' : ''"
-          title="刷新"
+          :title="t('action.refresh')"
           @click.stop="load"
         >
-          {{ loading ? '刷新中…' : '刷新' }}
+          {{ loading ? t('usage.refreshing') : t('action.refresh') }}
         </span>
       </template>
     </div>
@@ -456,7 +457,7 @@ onBeforeUnmount(() => {
             <p class="flex items-center gap-1 text-[10px] text-secondary">
               <span class="truncate" :title="item.label">{{ item.label }}</span>
               <!-- The gateway serves cached numbers; an icon says so without taking a row. -->
-              <AppIcon v-if="item.cached" name="clock" :size="9" class="shrink-0 opacity-60" title="网关缓存的数据" />
+              <AppIcon v-if="item.cached" name="clock" :size="9" class="shrink-0 opacity-60" :title="t('usage.cached')" />
             </p>
             <p class="truncate font-mono text-[13px] text-strong">{{ amount(item.balances[0]) }}</p>
             <p v-if="item.balances.length > 1" class="truncate text-[9px] text-tertiary">
@@ -484,10 +485,10 @@ onBeforeUnmount(() => {
             <p class="min-w-0 flex-1 truncate text-[10px] text-secondary">{{ slotItem?.label }}</p>
             <template v-if="swipable">
               <span class="shrink-0 font-mono text-[9px] text-tertiary">{{ slotIndex + 1 }} / {{ limits.length }}</span>
-              <button class="usage-slot-arrow" type="button" data-no-drag title="上一个渠道" @click.stop="moveSlot(-1)">
+              <button class="usage-slot-arrow" type="button" data-no-drag :title="t('usage.prevChannel')" @click.stop="moveSlot(-1)">
                 <AppIcon name="chevron" :size="10" class="rotate-90" />
               </button>
-              <button class="usage-slot-arrow" type="button" data-no-drag title="下一个渠道" @click.stop="moveSlot(1)">
+              <button class="usage-slot-arrow" type="button" data-no-drag :title="t('usage.nextChannel')" @click.stop="moveSlot(1)">
                 <AppIcon name="chevron" :size="10" class="-rotate-90" />
               </button>
             </template>
@@ -504,9 +505,9 @@ onBeforeUnmount(() => {
                     <span
                       v-if="resetText(window.resetAt ?? item.resetAt) !== ''"
                       class="shrink-0 text-[9px] text-tertiary"
-                      :title="`${resetText(window.resetAt ?? item.resetAt)} 重置`"
+                      :title="t('usage.resetAt', { time: resetText(window.resetAt ?? item.resetAt) })"
                     >
-                      · {{ resetText(window.resetAt ?? item.resetAt) }} 重置
+                      {{ t('usage.resetSuffix', { time: resetText(window.resetAt ?? item.resetAt) }) }}
                     </span>
                   </div>
                   <div class="usage-bar mt-0.5 h-1 w-full overflow-hidden rounded-full">
@@ -519,7 +520,7 @@ onBeforeUnmount(() => {
         </div>
         <!-- 全部限额来源都失败：给一句可读的提示，而不是一片空白。 -->
         <p v-else-if="view === 'detail' && failed.length > 0" class="mt-1 rounded-xl px-2 py-1.5 text-[10px] leading-relaxed text-tertiary">
-          暂无可用限额来源（{{ failed.length }} 个渠道请求失败，可切到总览查看原因）
+          {{ t('usage.noLimits', { count: failed.length }) }}
         </p>
 
         <!-- 总览视图：每个上游一张卡片，圆环按实际窗口数平铺。 -->
@@ -530,14 +531,14 @@ onBeforeUnmount(() => {
           :class="balances.length > 0 ? 'border-t border-outline-medium pt-2 dark:border-white/10' : ''"
         >
           <p v-if="overview.length === 0" class="rounded-xl px-2 py-1.5 text-[10px] leading-relaxed text-tertiary">
-            暂无可显示的限额来源
+            {{ t('usage.noOverview') }}
           </p>
           <template v-else>
             <div v-for="item in overview" :key="`overview-${item.id}`" class="usage-tile rounded-xl px-2 py-1.5">
               <div class="flex items-center gap-1">
                 <p class="min-w-0 flex-1 truncate text-[10px] text-secondary" :title="item.label">{{ item.label }}</p>
-                <span class="shrink-0 font-mono text-[9px] text-tertiary">{{ windowCountOf(item) }} 项</span>
-                <span class="shrink-0 text-[9px] text-success-on text-success-on">正常</span>
+                <span class="shrink-0 font-mono text-[9px] text-tertiary">{{ t('usage.windowCount', { count: windowCountOf(item) }) }}</span>
+                <span class="shrink-0 text-[9px] text-success-on text-success-on">{{ t('usage.normal') }}</span>
               </div>
               <div class="mt-1.5 flex flex-wrap gap-x-1.5 gap-y-1.5">
                 <button
@@ -545,7 +546,7 @@ onBeforeUnmount(() => {
                   :key="window.key"
                   type="button"
                   class="usage-ring relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-                  :aria-label="`${String(window.label)} ${String(windowPercent(window))}%，${windowAmountText(window)}`"
+                  :aria-label="t('usage.ringAria', { label: window.label, percent: windowPercent(window), amount: windowAmountText(window) })"
                   @pointerenter="showTip($event, item, window)"
                   @pointermove="moveTip"
                   @pointerleave="hideTip"
@@ -574,7 +575,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <p v-else class="text-[10px] leading-relaxed text-tertiary">网关未返回可用的余额。</p>
+      <p v-else class="text-[10px] leading-relaxed text-tertiary">{{ t('usage.noBalance') }}</p>
     </div>
 
     <!-- 自绘 tooltip：跟随指针定位（不读 DOM 尺寸），带小箭头，深色主题跟随卡片。 -->

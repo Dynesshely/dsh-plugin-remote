@@ -42,7 +42,7 @@ export const mobileLayout = computed(() => belowWide.value)
  * 视口窄，或 composer 报告工具栏放不下它的桌面控件。它只影响控件形态，**不影响布局模式** ——
  * 所以「控件收起」不会再把两栏挤出文档流，也就不会触发新一轮测量。
  */
-export const compact = computed(() => belowWide.value || composerOverflow.value)
+export const compact = computed(() => composerOverflow.value)
 
 /**
  * Legacy composite flag: narrow viewport **or** composer overflow.

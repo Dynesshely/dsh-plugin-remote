@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { answerItems, answerOf, initialDraft, normalizeQuestions } from '../lib/questions.js'
 import { answerQuestion } from '../lib/store.js'
 import AppIcon from './AppIcon.vue'
+import { t } from '../lib/i18n.js'
 
 /**
  * The question card, laid out like the Desktop's `ask_user_question` surface.
@@ -20,7 +21,7 @@ const props = defineProps({
   /** Pending call id; omit to render read-only. */
   callId: { type: String, default: '' },
   /** Small line above the question. */
-  eyebrow: { type: String, default: '提问' },
+  eyebrow: { type: String, default: '' },
   /** Note shown when the question belongs to another Session. */
   elsewhere: { type: Boolean, default: false },
 })
@@ -111,14 +112,14 @@ async function submit () {
   const missing = model.value.findIndex((question) => !answered(question))
   if (missing >= 0) {
     index.value = missing
-    error.value = '还有问题没有回答'
+    error.value = t('question.unanswered')
     return
   }
   busy.value = true
   try {
     const accepted = await answerQuestion(props.callId, answerItems(drafts.value, model.value))
     submitted.value = accepted
-    if (!accepted) error.value = '提交失败，请重试'
+    if (!accepted) error.value = t('question.submitFailed')
   } finally {
     busy.value = false
   }
@@ -137,7 +138,7 @@ function onKeydown (event) {
     <header class="flex items-start justify-between gap-4 px-4 pt-4">
       <div class="min-w-0">
         <p class="mb-1 text-[11px] leading-4 text-tertiary">
-          {{ eyebrow }}<span v-if="elsewhere" class="ml-1 opacity-70">（其它会话）</span>
+          {{ eyebrow || t('question.eyebrow') }}<span v-if="elsewhere" class="ml-1 opacity-70">{{ t('question.otherSession') }}</span>
         </p>
         <h3 class="text-[16px] leading-[22px] font-medium">
           {{ current?.header ?? current?.question ?? '' }}
@@ -147,9 +148,9 @@ function onKeydown (event) {
         </p>
       </div>
       <div class="flex shrink-0 items-center gap-1">
-        <span v-if="readOnly" class="text-[12px] leading-6 whitespace-nowrap text-tertiary">已作答</span>
+        <span v-if="readOnly" class="text-[12px] leading-6 whitespace-nowrap text-tertiary">{{ t('question.answered') }}</span>
         <span v-else class="text-[12px] leading-6 whitespace-nowrap text-tertiary">
-          {{ busy ? '提交中…' : '等待你的回答' }}
+          {{ busy ? t('question.submitting') : t('question.waiting') }}
         </span>
       </div>
     </header>
@@ -192,7 +193,7 @@ function onKeydown (event) {
           <span class="min-w-0 flex-1">
             <span class="flex items-center gap-1.5">
               <span class="text-[13px] leading-5">{{ option.label }}</span>
-              <span v-if="option.recommended" class="chip px-1.5 py-0 text-[10px] leading-4">推荐</span>
+              <span v-if="option.recommended" class="chip px-1.5 py-0 text-[10px] leading-4">{{ t('question.recommended') }}</span>
             </span>
             <span v-if="option.description" class="mt-0.5 block text-[11px] leading-4 text-secondary">
               {{ option.description }}
@@ -210,7 +211,7 @@ function onKeydown (event) {
             :value="draftOf(current.id).custom"
             type="text"
             class="w-full bg-transparent text-[13px] outline-none placeholder:text-zinc-400"
-            placeholder="其他…（自行输入）"
+            :placeholder="t('question.customPlaceholder')"
             @input="writeCustom(current, $event.target.value)"
           />
         </label>
@@ -228,7 +229,7 @@ function onKeydown (event) {
           type="button"
           class="grid h-6 w-6 place-items-center rounded-full text-tertiary transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
           :disabled="index === 0"
-          title="上一个问题"
+          :title="t('question.previous')"
           @click="index -= 1"
         >
           <AppIcon name="chevron" :size="13" class="-rotate-90" />
@@ -240,7 +241,7 @@ function onKeydown (event) {
           type="button"
           class="grid h-6 w-6 place-items-center rounded-full text-tertiary transition-colors hover:bg-white/60 hover:text-zinc-700 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10 dark:hover:text-zinc-100"
           :disabled="index >= model.length - 1"
-          title="下一个问题"
+          :title="t('question.next')"
           @click="index += 1"
         >
           <AppIcon name="chevron" :size="13" class="rotate-90" />
@@ -251,11 +252,11 @@ function onKeydown (event) {
         type="button"
         class="btn btn-primary"
         :disabled="busy || !complete"
-        :title="complete ? '提交回答' : '还有问题没有回答'"
+        :title="complete ? t('question.submit') : t('question.unanswered')"
         @click="submit"
       >
         <AppIcon name="send" :size="13" />
-        <span>提交</span>
+        <span>{{ t('question.submitLabel') }}</span>
       </button>
     </footer>
   </div>

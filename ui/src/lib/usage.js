@@ -6,6 +6,8 @@
  * 会渲染几个环。
  */
 
+import { t } from './i18n.js'
+
 /** 两种视图：`detail`（默认，单渠道 + 进度条）与 `overview`（每个上游一张卡片 + 圆环）。 */
 export const USAGE_VIEW_DETAIL = 'detail'
 export const USAGE_VIEW_OVERVIEW = 'overview'
@@ -114,13 +116,13 @@ export function windowAmountText (window) {
   const trim = (text) => (text.endsWith('.0') ? text.slice(0, -2) : text)
   const points = Number(window?.points)
   if (Number.isFinite(points)) {
-    const unit = typeof window?.unit === 'string' && window.unit !== '' ? window.unit : '点数'
+    const unit = typeof window?.unit === 'string' && window.unit !== '' ? window.unit : t('usage.extra.points')
     // 积分/credits 通常是整数：整数就原样显示，别写成 "1200.0 积分"。
     const text = Number.isInteger(points) && Math.abs(points) < 1_000_000 ? String(points) : shortNumber(points)
     return `${text} ${unit}`
   }
   if (window?.missingQuota === true) {
-    return `${trim(shortNumber(window?.used))}（无配额）`
+    return t('usage.extra.noQuotaLine', { amount: trim(shortNumber(window?.used)) })
   }
   return `${trim(shortNumber(window?.used))} / ${trim(shortNumber(window?.total))}`
 }
@@ -133,6 +135,18 @@ function resetTimeOf (resetAt) {
 }
 
 /**
+ * @param value - 数量。
+ * @param unitKey - 单位的字典 key。
+ * @returns 一整句重置文案。
+ *
+ * 整句是一个 key，单位只作为变量塞进去：中英文的语序不同，拆成「数字 + 单位 + 后缀」三段拼接
+ * 只能对上一种语言的语序。
+ */
+function resetInLine (value, unitKey) {
+  return t('usage.extra.resetIn', { value: String(value), unit: t(unitKey) })
+}
+
+/**
  * @param resetAt - ISO 时刻。
  * @param now - 参照时间（单测可注入）。
  * @returns 「3 小时后重置」这类人读文案；无法解析时返回空字符串。
@@ -141,13 +155,13 @@ export function resetInText (resetAt, now = Date.now()) {
   const time = resetTimeOf(resetAt)
   if (time === undefined) return ''
   const diff = time - now
-  if (diff <= 0) return '已到重置时间'
+  if (diff <= 0) return t('usage.extra.resetReached')
   const minute = 60_000
   const hour = 60 * minute
   const day = 24 * hour
-  if (diff < hour) return `${String(Math.max(1, Math.round(diff / minute)))} 分钟后重置`
-  if (diff < day) return `${String(Math.round(diff / hour))} 小时后重置`
-  return `${String(Math.round(diff / day))} 天后重置`
+  if (diff < hour) return resetInLine(Math.max(1, Math.round(diff / minute)), 'usage.extra.unitMinute')
+  if (diff < day) return resetInLine(Math.round(diff / hour), 'usage.extra.unitHour')
+  return resetInLine(Math.round(diff / day), 'usage.extra.unitDay')
 }
 
 /**
@@ -221,9 +235,10 @@ export function windowCountOf (item) {
  */
 export function windowTip (item, window, now = Date.now()) {
   const percent = windowPercent(window)
+  const source = typeof item?.label === 'string' && item.label !== '' ? item.label : t('usage.extra.source')
   return {
-    title: `${typeof item?.label === 'string' && item.label !== '' ? item.label : '来源'} · ${String(window?.label ?? '窗口')}`,
-    amount: `${String(percent)}%（${windowAmountText(window)}）`,
+    title: `${source} · ${String(window?.label ?? t('usage.extra.window'))}`,
+    amount: t('usage.extra.amountLine', { percent: String(percent), amount: windowAmountText(window) }),
     percent,
     reset: resetInText(window?.resetAt ?? item?.resetAt, now),
   }

@@ -4,6 +4,7 @@ import { consumeLinkToken, login } from './lib/api.js'
 import { clearError, loadModels, loadState, reportError, state } from './lib/store.js'
 import { mobileLayout as mobile } from './lib/layout.js'
 import { loadMessage, loadPhase, SLOW_AFTER_MS } from './lib/loading.js'
+import { t } from './lib/i18n.js'
 import AppIcon from './components/AppIcon.vue'
 import SidebarPane from './components/SidebarPane.vue'
 import ConversationPane from './components/ConversationPane.vue'
@@ -44,7 +45,7 @@ let bootTimer
  */
 const errorText = computed(() => {
   if (state.lastError !== '') return state.lastError
-  if (state.transcriptDegraded) return '转写渲染失败，已降级显示；切换会话或刷新可恢复'
+  if (state.transcriptDegraded) return t('shell.degraded')
   return ''
 })
 
@@ -68,7 +69,7 @@ watch(() => state.booted, (value) => {
 
 /** How the boot request should read right now. */
 const bootPhase = computed(() => loadPhase(!state.booted, bootSlow.value, state.bootError !== ''))
-const bootHint = computed(() => loadMessage(bootPhase.value, '应用状态'))
+const bootHint = computed(() => loadMessage(bootPhase.value, t('loading.appState')))
 
 /**
  * Retry the first state request.
@@ -289,7 +290,7 @@ onMounted(async () => {
   try {
     await consumeLinkToken()
   } catch {
-    loginError.value = '链接里的令牌无效'
+    loginError.value = t('shell.tokenInvalid')
   }
   await loadState()
   void loadModels()
@@ -344,7 +345,7 @@ async function submitToken () {
         <button
           type="button"
           class="shrink-0 cursor-pointer rounded px-1.5 opacity-70 hover:opacity-100"
-          title="关闭"
+          :title="t('action.close')"
           @click="clearError"
         >✕</button>
       </div>
@@ -360,14 +361,14 @@ async function submitToken () {
       <div class="w-full max-w-md">
         <p class="mb-3 flex items-center gap-2 text-[13px] text-zinc-500 dark:text-zinc-400">
           <AppIcon v-if="state.bootError === ''" name="refresh" :size="13" class="animate-spin" />
-          <span>{{ state.bootError !== '' ? state.bootError : (bootHint === '' ? '正在连接 DSH…' : bootHint) }}</span>
+          <span>{{ state.bootError !== '' ? state.bootError : (bootHint === '' ? t('shell.connecting') : bootHint) }}</span>
         </p>
         <div v-if="state.bootError === ''" class="space-y-2">
           <div class="rc-shimmer h-14" />
           <div class="rc-shimmer h-24" />
           <div class="rc-shimmer h-16" />
         </div>
-        <button v-else class="btn btn-primary" type="button" @click="retryBoot">重试</button>
+        <button v-else class="btn btn-primary" type="button" @click="retryBoot">{{ t('action.retry') }}</button>
       </div>
     </div>
 
@@ -381,19 +382,19 @@ async function submitToken () {
           <span class="text-base font-semibold tracking-wide">DSH REMOTE</span>
         </div>
         <p class="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-          需要一个访问令牌。它由 Host 首次启动时生成，写在
-          <code class="rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 text-[12px] dark:bg-white/10">~/.dsh/remote-control/auth.json</code>，
-          或直接使用带 <code class="rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 text-[12px] dark:bg-white/10">?k=</code> 的链接。
+          {{ t('misc.tokenGateLead') }}
+          <code class="rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 text-[12px] dark:bg-white/10">~/.dsh/remote-control/auth.json</code>{{ t('misc.tokenGateMiddle') }}
+          <code class="rounded-md bg-zinc-900/[0.06] px-1.5 py-0.5 text-[12px] dark:bg-white/10">?k=</code>{{ t('misc.tokenGateTail') }}
         </p>
         <div class="flex gap-2">
           <input
             v-model="token"
             type="password"
             class="field flex-1"
-            placeholder="令牌"
+            :placeholder="t('misc.tokenPlaceholder')"
             @keydown.enter="submitToken"
           />
-          <button class="btn btn-primary" type="button" @click="submitToken">进入</button>
+          <button class="btn btn-primary" type="button" @click="submitToken">{{ t('misc.enter') }}</button>
         </div>
         <p v-if="loginError" class="mt-2 text-sm text-rose-500">{{ loginError }}</p>
       </div>
@@ -447,7 +448,7 @@ async function submitToken () {
         <div
           v-if="mobile === false && filesOpen"
           class="group absolute inset-y-0 -left-1 z-40 w-3 cursor-col-resize touch-none"
-          title="拖动调整宽度"
+          :title="t('misc.resizeWidth')"
           @pointerdown="startFilesResize"
           @pointermove="moveFilesResize"
           @pointerup="endFilesResize"

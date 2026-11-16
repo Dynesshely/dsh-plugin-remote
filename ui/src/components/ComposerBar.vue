@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { cancelTurn, releaseImagePreview, selectModel, selectPermission, sendPrompt, stageImage, state } from '../lib/store.js'
 import { compact, reportComposerOverflow } from '../lib/layout.js'
+import { t } from '../lib/i18n.js'
 import { modelIcon, modelMark } from '../lib/model-icons.js'
 import ModelBrowser from './ModelBrowser.vue'
 import ComboBox from './ComboBox.vue'
@@ -42,10 +43,27 @@ const currentModel = computed(() => {
   return selection === null || selection === undefined ? '' : `${selection.provider}/${selection.model}`
 })
 
+/**
+ * @param option - one permission option from the host.
+ * @returns its localised label.
+ *
+ * The host describes its own permission modes, in one language. The four modes are a closed set, so the label is
+ * translated by value and the host's wording becomes the description — which keeps a mode this build has never
+ * heard of readable instead of blank.
+ */
+function permissionName (option) {
+  const value = String(option.value ?? '').toLowerCase()
+  if (value.includes('read') && !value.includes('write')) return t('permission.read')
+  if (value.includes('workspace')) return t('permission.workspace')
+  if (value.includes('full') || value.includes('danger') || value.includes('unrestricted')) return t('permission.full')
+  if (value.includes('auto') || value.includes('default') || value.includes('ask')) return t('permission.auto')
+  return option.name
+}
+
 const permissionItems = computed(() =>
   state.permissions.options.map((option) => ({
     value: option.value,
-    name: option.name,
+    name: permissionName(option),
     description: option.description,
     icon: 'shield',
   })))
@@ -55,20 +73,29 @@ const infoRows = computed(() => {
   const telemetry = state.telemetry
   const cacheTotal = telemetry.totalCacheRead + telemetry.totalInput
   return [
-    ['状态', telemetry.running ? '运行中' : '空闲'],
-    ['进度', telemetry.turn > 0 ? `第 ${telemetry.turn} 轮 · 第 ${telemetry.step} 步` : '—'],
-    ['模型', telemetry.model || currentModel.value || '—'],
-    ['供应商', telemetry.provider || '—'],
-    ['输入 tokens', String(telemetry.totalInput)],
-    ['输出 tokens', String(telemetry.totalOutput)],
-    ['缓存读取', `${telemetry.totalCacheRead}（命中 ${cacheTotal === 0 ? 0 : Math.round((telemetry.totalCacheRead / cacheTotal) * 100)}%）`],
-    ['缓存写入', String(telemetry.totalCacheWrite)],
-    ['推理 tokens', String(telemetry.totalReasoning)],
-    ['生成速度', telemetry.tokensPerSecond > 0 ? `${telemetry.tokensPerSecond.toFixed(1)} tok/s` : '—'],
-    ['上下文', telemetry.contextWindow > 0 ? `${telemetry.lastInput} / ${telemetry.contextWindow}（${Math.round((telemetry.lastInput / telemetry.contextWindow) * 100)}%）` : '—'],
-    ['权限', state.permissions.current ?? '—'],
-    ['会话', state.selected ?? '—'],
-    ['监听', state.bind || '—'],
+    [t('composer.extraStatus'), telemetry.running ? t('sidebar.running') : t('run.idle')],
+    [t('composer.extraProgress'), telemetry.turn > 0 ? t('composer.extraTurnStep', { turn: telemetry.turn, step: telemetry.step }) : '—'],
+    [t('composer.extraModel'), telemetry.model || currentModel.value || '—'],
+    [t('composer.extraProvider'), telemetry.provider || '—'],
+    [t('composer.extraInputTokens'), String(telemetry.totalInput)],
+    [t('composer.extraOutputTokens'), String(telemetry.totalOutput)],
+    [t('composer.extraCacheRead'), t('composer.extraCacheReadValue', {
+      count: telemetry.totalCacheRead,
+      percent: cacheTotal === 0 ? 0 : Math.round((telemetry.totalCacheRead / cacheTotal) * 100),
+    })],
+    [t('composer.extraCacheWrite'), String(telemetry.totalCacheWrite)],
+    [t('composer.extraReasoningTokens'), String(telemetry.totalReasoning)],
+    [t('composer.extraSpeed'), telemetry.tokensPerSecond > 0 ? `${telemetry.tokensPerSecond.toFixed(1)} tok/s` : '—'],
+    [t('composer.extraContext'), telemetry.contextWindow > 0
+      ? t('composer.extraContextValue', {
+        used: telemetry.lastInput,
+        total: telemetry.contextWindow,
+        percent: Math.round((telemetry.lastInput / telemetry.contextWindow) * 100),
+      })
+      : '—'],
+    [t('permission.label'), state.permissions.current ?? '—'],
+    [t('composer.extraSession'), state.selected ?? '—'],
+    [t('composer.extraBind'), state.bind || '—'],
   ]
 })
 
@@ -277,8 +304,8 @@ watch([() => attachments.value.length, () => state.selected, running], () => {
 /* The placeholder must stay one line: a wrapped placeholder cannot grow the textarea, so its second
    line would be clipped and the field would look scrollable on a phone. */
 const placeholder = computed(() => {
-  if (state.selected === undefined) return '先选择一个会话'
-  return compact.value ? '发消息…' : '发消息…（Enter 换行 / Ctrl+Enter 发送，可直接粘贴图片）'
+  if (state.selected === undefined) return t('composer.extraPickSession')
+  return compact.value ? t('composer.extraPlaceholderShort') : t('composer.placeholder')
 })
 /** Whether the full catalogue browser is open. */
 const browserOpen = ref(false)
@@ -322,13 +349,13 @@ function chooseFromBrowser (modelId) {
           class="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-outline"
         >
           <!-- 预览是 blob: URL（零拷贝），不再把整张图的 base64 塞进 <img src>。 -->
-          <button type="button" class="h-full w-full" title="预览" data-zoom="1">
+          <button type="button" class="h-full w-full" :title="t('composer.preview')" data-zoom="1">
             <img :src="attachment.previewUrl" :alt="attachment.name" decoding="async" class="h-full w-full object-cover" />
           </button>
           <button
             type="button"
             class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-            title="移除"
+            :title="t('composer.extraRemove')"
             @click="removeAttachment(index)"
           >
             <AppIcon name="close" :size="11" />
@@ -336,7 +363,7 @@ function chooseFromBrowser (modelId) {
         </div>
         <!-- 处理中就说出来：解码/压缩/上传期间不显示任何提示，读者会以为卡死了。 -->
         <span v-if="staging > 0" class="shrink-0 px-1 text-[11px] text-tertiary">
-          正在处理图片…
+          {{ t('composer.processingImages') }}
         </span>
       </div>
 
@@ -350,7 +377,7 @@ function chooseFromBrowser (modelId) {
 
       <!-- Left cluster: attachment intake. -->
       <div ref="toolbar" class="flex items-center gap-1.5 px-2 pb-2">
-        <button ref="attachRef" class="icon-btn shrink-0" type="button" title="添加图片" :disabled="state.selected === undefined" @click="fileInput.click()">
+        <button ref="attachRef" class="icon-btn shrink-0" type="button" :title="t('composer.attach')" :disabled="state.selected === undefined" @click="fileInput.click()">
           <AppIcon name="paperclip" :size="16" />
         </button>
         <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="pick" />
@@ -363,11 +390,11 @@ function chooseFromBrowser (modelId) {
             class="shrink-0"
             :model-value="currentModel"
             :items="modelItems"
-        all-label="查看所有模型"
+        :all-label="t('composer.extraViewAll')"
         list-height="min(50vw, 80dvh)"
         @view-all="browserOpen = true"
             icon="cpu"
-            placeholder="模型"
+            :placeholder="t('composer.extraModel')"
             placement="up"
             align="right"
             width="max-w-[22rem]"
@@ -383,7 +410,7 @@ function chooseFromBrowser (modelId) {
             :model-value="state.permissions.current ?? ''"
             :items="permissionItems"
             icon="shield"
-            placeholder="权限"
+            :placeholder="t('permission.label')"
             placement="up"
             align="right"
             width="max-w-[12rem]"
@@ -394,7 +421,7 @@ function chooseFromBrowser (modelId) {
             v-if="compact"
             class="icon-btn"
             type="button"
-            title="查看状态详情"
+            :title="t('composer.extraStatusDetail')"
             @click="openInfo"
           >
             <AppIcon name="info" :size="16" />
@@ -403,7 +430,7 @@ function chooseFromBrowser (modelId) {
             v-if="compact"
             class="icon-btn"
             type="button"
-            title="模型与权限"
+            :title="t('composer.extraModelPermission')"
             :disabled="state.selected === undefined"
             @click="settingsOpen = true"
           >
@@ -413,7 +440,7 @@ function chooseFromBrowser (modelId) {
             v-if="running"
             type="button"
             class="btn btn-danger h-9 w-9 shrink-0 p-0"
-            title="停止当前轮次"
+            :title="t('composer.extraStopTurn')"
             @click="cancelTurn"
           >
             <AppIcon name="stop" :size="15" />
@@ -422,7 +449,7 @@ function chooseFromBrowser (modelId) {
             ref="sendRef"
             type="button"
             class="btn btn-primary h-9 w-9 shrink-0 p-0"
-            title="发送（Ctrl+Enter）"
+            :title="t('composer.extraSend')"
             :disabled="!canSend"
             @click="send"
           >
@@ -446,7 +473,7 @@ function chooseFromBrowser (modelId) {
         <div class="panel pop flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden">
           <header class="flex shrink-0 items-center gap-2 border-b border-outline-medium px-3 py-2.5 dark:border-white/10">
             <AppIcon name="gear" :size="15" class="text-tertiary" />
-            <span class="flex-1 text-sm font-medium">模型与权限</span>
+            <span class="flex-1 text-sm font-medium">{{ t('composer.extraModelPermission') }}</span>
             <button class="icon-btn h-7 w-7" type="button" @click="settingsOpen = false">
               <AppIcon name="close" :size="13" />
             </button>
@@ -455,7 +482,7 @@ function chooseFromBrowser (modelId) {
                so a long model catalog can never push it out of reach. -->
           <div class="min-h-0 flex-1 overflow-y-auto p-3">
             <section>
-              <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">模型</h3>
+              <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">{{ t('composer.extraModel') }}</h3>
               <div class="space-y-1">
                 <button
                   v-for="item in modelItems"
@@ -471,12 +498,12 @@ function chooseFromBrowser (modelId) {
                   </span>
                   <AppIcon v-if="item.value === currentModel" name="check" :size="14" class="text-primary" />
                 </button>
-                <p v-if="modelItems.length === 0" class="px-2 py-1 text-xs text-tertiary">模型目录不可用</p>
+                <p v-if="modelItems.length === 0" class="px-2 py-1 text-xs text-tertiary">{{ t('composer.extraModelsUnavailable') }}</p>
               </div>
             </section>
           </div>
           <section class="shrink-0 border-t border-outline-medium bg-white/30 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-            <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">权限预设</h3>
+            <h3 class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary uppercase">{{ t('composer.extraPermissionPresets') }}</h3>
             <div class="flex flex-wrap gap-1.5">
               <button
                 v-for="item in permissionItems"
@@ -490,7 +517,7 @@ function chooseFromBrowser (modelId) {
                 <AppIcon v-if="item.value === state.permissions.current" name="check" :size="12" />
                 {{ item.name }}
               </button>
-              <span v-if="permissionItems.length === 0" class="text-xs text-tertiary">权限目录不可用</span>
+              <span v-if="permissionItems.length === 0" class="text-xs text-tertiary">{{ t('composer.extraPermissionsUnavailable') }}</span>
             </div>
           </section>
         </div>
@@ -507,7 +534,7 @@ function chooseFromBrowser (modelId) {
         <div class="panel pop flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden">
           <header class="flex shrink-0 items-center gap-2 border-b border-outline-medium px-3 py-2.5 dark:border-white/10">
             <AppIcon name="info" :size="15" class="text-tertiary" />
-            <span class="flex-1 text-sm font-medium">状态详情</span>
+            <span class="flex-1 text-sm font-medium">{{ t('composer.extraStatusTitle') }}</span>
             <button class="icon-btn h-7 w-7" type="button" @click="infoOpen = false">
               <AppIcon name="close" :size="13" />
             </button>

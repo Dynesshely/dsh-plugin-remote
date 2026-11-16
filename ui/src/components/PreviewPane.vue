@@ -4,6 +4,7 @@ import { api } from '../lib/api.js'
 import { codeHtml } from '../lib/highlight.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { state } from '../lib/store.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
 
@@ -56,7 +57,7 @@ const workspaceRoot = computed(() => {
 
 /** @returns the breadcrumb segments of the current directory, root first. */
 const crumbs = computed(() => {
-  const trail = [{ name: workspaceRoot.value.split('/').filter((part) => part !== '').pop() ?? '工作区', path: '' }]
+  const trail = [{ name: workspaceRoot.value.split('/').filter((part) => part !== '').pop() ?? t('preview.workspace'), path: '' }]
   let accumulated = ''
   for (const segment of String(path.value).split('/').filter((part) => part !== '')) {
     accumulated = accumulated === '' ? segment : `${accumulated}/${segment}`
@@ -205,8 +206,8 @@ onMounted(async () => {
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <header class="flex shrink-0 items-center gap-1.5 px-1.5 pt-1 pb-1">
-      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">文件预览</span>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="刷新" @click="preview === undefined ? open(path) : show({ name: preview.name, kind: 'file', size: preview.size })">
+      <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-muted">{{ t('container.preview') }}</span>
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('action.refresh')" @click="preview === undefined ? open(path) : show({ name: preview.name, kind: 'file', size: preview.size })">
         <AppIcon name="refresh" :size="13" />
       </button>
     </header>
@@ -222,7 +223,7 @@ onMounted(async () => {
           @update:model-value="switchWorkspace"
         />
       </div>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="上一级" :disabled="path === ''" @click="open(path.split('/').slice(0, -1).join('/'))">
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('preview.up')" :disabled="path === ''" @click="open(path.split('/').slice(0, -1).join('/'))">
         <AppIcon name="arrowUp" :size="13" />
       </button>
     </div>
@@ -252,12 +253,12 @@ onMounted(async () => {
     <!-- Preview -->
     <div v-if="preview !== undefined" class="flex min-h-0 flex-1 flex-col px-1.5 pb-2">
       <div class="mb-1.5 flex shrink-0 items-center gap-1.5">
-        <button class="icon-btn h-6 w-6 shrink-0" type="button" title="返回列表" @click="back">
+        <button class="icon-btn h-6 w-6 shrink-0" type="button" :title="t('preview.back')" @click="back">
           <AppIcon name="arrowLeft" :size="12" />
         </button>
         <span class="min-w-0 flex-1 truncate text-[11px] text-secondary" :title="preview.path">{{ preview.name }}</span>
         <span class="shrink-0 text-[10px] text-tertiary">{{ formatSize(preview.size) }}</span>
-        <a class="icon-btn h-6 w-6 shrink-0" :href="rawUrl" download :title="'下载'">
+        <a class="icon-btn h-6 w-6 shrink-0" :href="rawUrl" download :title="t('action.download')">
           <AppIcon name="download" :size="12" />
         </a>
       </div>
@@ -286,7 +287,7 @@ onMounted(async () => {
             @error="onMediaError"
           />
           <p v-if="unplayable" class="shrink-0 px-2 py-1 text-[10px] text-warning-on">
-            这个视频容器浏览器无法解码（{{ preview.name.split('.').pop() }}）。可以用上面的下载按钮本地播放。
+            {{ t('preview.unplayable', { ext: preview.name.split('.').pop() }) }}
           </p>
         </div>
 
@@ -312,18 +313,18 @@ onMounted(async () => {
         />
 
         <p v-else class="px-3 py-6 text-center text-[11px] text-tertiary">
-          这个类型还没有预览，可以用上面的下载按钮打开。
+          {{ t('preview.unsupported') }}
         </p>
 
-        <p v-if="loading" class="px-3 py-2 text-[11px] text-tertiary">读取中…</p>
+        <p v-if="loading" class="px-3 py-2 text-[11px] text-tertiary">{{ t('preview.reading') }}</p>
       </div>
     </div>
 
     <!-- List -->
     <div v-else class="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
-      <p v-if="loading" class="px-2 py-2 text-[11px] text-tertiary">读取中…</p>
+      <p v-if="loading" class="px-2 py-2 text-[11px] text-tertiary">{{ t('preview.reading') }}</p>
       <p v-else-if="(listing?.entries ?? []).length === 0" class="px-2 py-6 text-center text-[11px] text-tertiary">
-        这个目录是空的。
+        {{ t('preview.emptyDir') }}
       </p>
       <ul v-else class="space-y-0.5">
         <li v-for="entry in listing.entries" :key="entry.name">

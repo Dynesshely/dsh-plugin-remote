@@ -1,4 +1,5 @@
 import { computed, reactive } from 'vue'
+import { t } from './i18n.js'
 import { api, openStream, UnauthorizedError, uploadImage } from './api.js'
 import { parseQuestionArgs, parseQuestionResult } from './questions.js'
 import {
@@ -232,7 +233,7 @@ export const groupedSessions = computed(() => {
   for (const workspace of state.workspaces) {
     byWorkspace.set(workspace.id, { ...workspace, sessions: [] })
   }
-  const orphans = { id: '__none__', title: '未归档', path: '', sessions: [] }
+  const orphans = { id: '__none__', title: t('store.orphans'), path: '', sessions: [] }
   // Archived Sessions stay reachable but out of the way, like the desktop's archived section.
   const archived = []
   for (const session of state.sessions) {
@@ -518,7 +519,7 @@ function buildTranscriptItems () {
     if (type === 'turn/end') {
       const reason = data.reason?.kind
       if (reason !== undefined && reason !== 'completed') {
-        items.push({ kind: 'notice', key: `turn-${String(event.seq)}`, text: `本轮结束：${String(reason)}` })
+        items.push({ kind: 'notice', key: `turn-${String(event.seq)}`, text: t('store.turnEnded', { reason: String(reason) }) })
       }
       // One stats row per finished turn, so each answer carries what it cost.
       if (turnStats !== null) {
@@ -539,7 +540,11 @@ function buildTranscriptItems () {
       continue
     }
     if (type === 'model-retry' || type === 'turn-error') {
-      items.push({ kind: 'notice', key: `error-${String(event.seq)}`, text: `${type}：${JSON.stringify(data).slice(0, 300)}` })
+      items.push({
+        kind: 'notice',
+        key: `error-${String(event.seq)}`,
+        text: t('misc.eventDump', { type, data: JSON.stringify(data).slice(0, 300) }),
+      })
     }
   }
   // Consecutive calls of one tool second-level collapse into a group card, so a run of five
@@ -643,7 +648,7 @@ function computeMessageParts (message) {
         height: Number.isFinite(Number(attachment.height)) ? Number(attachment.height) : undefined,
       })
       // No "🖼 图片" label: images render as thumbnails in the bubble itself.
-    } else if (block.type === 'file') files.push(`📎 ${String(block.attachment?.name ?? '文件')}`)
+    } else if (block.type === 'file') files.push(`📎 ${String(block.attachment?.name ?? t('store.fileFallback'))}`)
   }
   return { text: text.join('\n'), reasoning: reasoning.join('\n'), files, images }
 }
@@ -874,7 +879,7 @@ export async function loadState (signal) {
       return
     }
     // 被后一次加载取消：这次的结果已经没人要了，也不能当成启动失败去亮错误页。
-    if (String(error?.message ?? error) === '已取消') return
+    if (error?.cancelled === true) return
     state.bootError = String(error.message ?? error)
     state.booted = true
   }
@@ -1233,7 +1238,7 @@ export async function loadOlder () {
   } catch (error) {
     const message = String(error.message ?? error)
     // Cancelling is not a failure, so it must not be reported as one.
-    if (message !== '已取消') state.olderError = message
+    if (error?.cancelled !== true) state.olderError = message
     return 0
   } finally {
     clearSlowWatch('older')
@@ -1648,7 +1653,7 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 export function reportError (error, source = 'runtime') {
   const message = typeof error === 'string'
     ? error
-    : String(error?.message ?? error ?? '未知错误')
+    : String(error?.message ?? error ?? t('store.unknownError'))
   const text = `[${source}] ${message}`.slice(0, 400)
   state.lastError = text
   state.lastErrorAt = Date.now()
@@ -2138,11 +2143,16 @@ async function shrinkImage (file) {
  * @returns `{ uploadId, previewUrl, name, mediaType, size, width?, height? }`；previewUrl 用完必须 revoke。
  */
 export async function stageImage (file) {
-  if (!IMAGE_MEDIA_TYPES.has(file.type)) throw new Error(`不支持的图片类型：${file.type === '' ? '未知' : file.type}`)
-  if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error(`图片过大（${megabytes(file.size)} MB），上限 ${String(MAX_IMAGE_BYTES / (1024 * 1024))} MB`)
+  if (!IMAGE_MEDIA_TYPES.has(file.type)) {
+    throw new Error(t('misc.imageTypeUnsupported', { type: file.type === '' ? t('misc.imageTypeUnknown') : file.type }))
   }
-  if (file.size === 0) throw new Error('这张图片是空的，无法发送')
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error(t('misc.imageTooLarge', {
+      size: megabytes(file.size),
+      limit: String(MAX_IMAGE_BYTES / (1024 * 1024)),
+    }))
+  }
+  if (file.size === 0) throw new Error(t('misc.imageEmpty'))
   const name = file.name === '' ? undefined : file.name
   // GIF 不降采样：canvas 会把动图压成一张静帧。
   const prepared = file.type === 'image/gif' || file.size <= DOWNSCALE_OVER_BYTES
@@ -2153,7 +2163,7 @@ export async function stageImage (file) {
   try {
     const uploaded = await uploadImage(prepared.blob, { mediaType: prepared.mediaType, name })
     const uploadId = typeof uploaded?.uploadId === 'string' ? uploaded.uploadId : ''
-    if (uploadId === '') throw new Error('上传失败：宿主没有返回图片引用')
+    if (uploadId === '') throw new Error(t('misc.uploadFailedNoReference'))
     // 留一份 blob 给发送后的回显：宿主读不回附件时（见 `ensureAttachmentImage`），页面自己就能画出来。
     stagedImageBlobs.set(uploadId, { blob: prepared.blob, mediaType: prepared.mediaType, name, size: prepared.blob.size })
     while (stagedImageBlobs.size > 12) {

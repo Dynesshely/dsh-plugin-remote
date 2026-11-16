@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../lib/api.js'
 import { modelIcon, modelMark } from '../lib/model-icons.js'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import ModelMark from './ModelMark.vue'
 
@@ -57,7 +58,7 @@ const matched = computed(() => {
 
 /** @returns the family a model belongs to, for grouping. */
 function familyOf (row) {
-  return row.mark?.title ?? '其他'
+  return row.mark?.title ?? t('models.other')
 }
 
 /** @returns `[title, rows]` groups for the current view. */
@@ -128,12 +129,12 @@ onMounted(async () => {
     >
       <div class="panel panel-veil pop flex max-h-[88dvh] w-full max-w-2xl flex-col p-4">
         <div class="mb-3 flex items-center gap-2">
-          <h2 class="text-sm font-medium">所有模型</h2>
-          <span class="text-[11px] text-tertiary">{{ matched.length }} 个</span>
+          <h2 class="text-sm font-medium">{{ t('models.title') }}</h2>
+          <span class="text-[11px] text-tertiary">{{ t('models.count', { count: matched.length }) }}</span>
           <span v-if="metaSource === 'gateway'" class="rounded-full bg-fill-tint px-1.5 text-[9px] text-secondary">
-            容量来自网关
+            {{ t('models.fromGateway') }}
           </span>
-          <button class="icon-btn ml-auto h-7 w-7" type="button" title="关闭" @click="emit('close')">
+          <button class="icon-btn ml-auto h-7 w-7" type="button" :title="t('action.close')" @click="emit('close')">
             <AppIcon name="close" :size="13" />
           </button>
         </div>
@@ -142,9 +143,9 @@ onMounted(async () => {
         <div class="mb-2 flex flex-wrap items-center gap-1.5">
           <button
             v-for="option in [
-              { id: 'family', label: '按家族' },
-              { id: 'provider', label: '按渠道' },
-              { id: 'provider-family', label: '渠道内家族' },
+              { id: 'family', label: t('models.byFamily') },
+              { id: 'provider', label: t('models.byProvider') },
+              { id: 'provider-family', label: t('models.providerFamily') },
             ]"
             :key="option.id"
             type="button"
@@ -156,7 +157,7 @@ onMounted(async () => {
           >
             {{ option.label }}
           </button>
-          <input v-model="query" type="text" class="field ml-auto max-w-[12rem] py-1 text-[12px]" placeholder="搜索模型" />
+          <input v-model="query" type="text" class="field ml-auto max-w-[12rem] py-1 text-[12px]" :placeholder="t('models.search')" />
         </div>
 
         <div class="min-h-0 flex-1 overflow-y-auto">
@@ -179,11 +180,11 @@ onMounted(async () => {
                     <AppIcon v-if="row.id === model" name="check" :size="12" class="shrink-0 text-primary" />
                   </span>
                   <span class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-tertiary">
-                    <span v-if="capacity(row.id) !== ''" class="rounded bg-fill-tint px-1" :title="`上下文窗口 ${String(contextWindows[row.id])}`">
-                      {{ capacity(row.id) }} 上下文
+                    <span v-if="capacity(row.id) !== ''" class="rounded bg-fill-tint px-1" :title="t('models.contextTitle', { size: contextWindows[row.id] })">
+                      {{ t('models.context', { size: capacity(row.id) }) }}
                     </span>
-                    <span v-if="thinking(row)" class="rounded bg-fill-tint px-1" :title="`可调思考强度，默认 ${effort(row)}`">
-                      思考 {{ effort(row) }}
+                    <span v-if="thinking(row)" class="rounded bg-fill-tint px-1" :title="t('models.thinkingTitle', { effort: effort(row) })">
+                      {{ t('models.thinking', { effort: effort(row) }) }}
                     </span>
                     <span class="truncate" :title="row.id">{{ row.id }}</span>
                   </span>
@@ -191,7 +192,7 @@ onMounted(async () => {
               </button>
             </div>
           </section>
-          <p v-if="grouped.length === 0" class="px-1 py-3 text-[12px] text-tertiary">没有匹配的模型。</p>
+          <p v-if="grouped.length === 0" class="px-1 py-3 text-[12px] text-tertiary">{{ t('models.empty') }}</p>
         </div>
       </div>
     </div>

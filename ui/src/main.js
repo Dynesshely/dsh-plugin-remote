@@ -1,4 +1,19 @@
 import { createApp } from 'vue'
+import { install, lang } from './lib/i18n.js'
+import { enUS, zhCN } from './lib/locales.js'
+
+// Registered before the first component renders, so no screen ever draws a raw key.
+/**
+ * Locale slices, one per area.
+ *
+ * They are separate modules so two people migrating two screens never edit the same dictionary; the shell
+ * merges them here. A missing slice is simply absent from the bundle and its keys fall back to the other
+ * language, which keeps a half-migrated area readable while it is being translated.
+ */
+const slices = Object.values(import.meta.glob('./lib/locales.*.js', { eager: true }))
+install('zh-CN', { ...zhCN, ...Object.assign({}, ...slices.map((slice) => slice.zhCN ?? {})) })
+install('en-US', { ...enUS, ...Object.assign({}, ...slices.map((slice) => slice.enUS ?? {})) })
+document.documentElement.lang = lang.value
 import App from './App.vue'
 import { reportError } from './lib/store.js'
 import './style.css'

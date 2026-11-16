@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { previewCentre, tickCellHeight } from '../lib/rail.js'
 import AppIcon from './AppIcon.vue'
+import { t } from '../lib/i18n.js'
 
 /**
  * Prompt navigator: a compact cluster of ticks on the right edge of the transcript.
@@ -103,7 +104,7 @@ watch(() => props.ticks.length, onLeave)
     v-if="ticks.length > 0"
     ref="rail"
     class="pointer-events-none absolute flex w-7 select-none flex-col justify-center"
-    aria-label="prompt 快速导航"
+    :aria-label="t('rail.navigation')"
     role="navigation"
     @pointermove="onPointerMove"
     @pointerleave="onLeave"
@@ -118,7 +119,7 @@ watch(() => props.ticks.length, onLeave)
         type="button"
         class="pointer-events-auto flex w-full shrink-0 items-center justify-end pr-px"
         :style="{ height: `${cell}px` }"
-        :aria-label="`${tick.label}${tick.images > 0 ? `（含 ${tick.images} 张图片）` : ''}`"
+        :aria-label="tick.images > 0 ? t('rail.ariaWithImages', { label: tick.label, count: tick.images }) : tick.label"
         :title="tick.preview === '' ? tick.label : tick.preview"
         @focus="onFocus(tick.index)"
         @blur="onLeave"
@@ -148,7 +149,7 @@ watch(() => props.ticks.length, onLeave)
       <p v-if="preview.preview !== ''" class="line-clamp-6 text-[12px] leading-relaxed whitespace-pre-wrap break-words">
         {{ preview.preview }}
       </p>
-      <p v-else class="text-[12px] text-tertiary italic">（仅图片）</p>
+      <p v-else class="text-[12px] text-tertiary italic">{{ t('rail.onlyImages') }}</p>
     </div>
   </div>
 </template>

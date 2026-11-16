@@ -5,6 +5,7 @@ import { codeHtml } from '../lib/highlight.js'
 import AppIcon from './AppIcon.vue'
 import { imageReferencesIn } from '../lib/markdown.js'
 import { proxiedImageSrc } from '../lib/marked-setup.js'
+import { t } from '../lib/i18n.js'
 
 /** One tool call, collapsed to a single summary line until the reader opens it. */
 const props = defineProps({ item: { type: Object, required: true } })
@@ -44,7 +45,7 @@ const argsPreview = computed(() => {
 const argsText = computed(() => {
   const raw = rawArgs.value
   if (raw.length > MAX_PRETTY_CHARS) {
-    return `${raw.slice(0, RAW_PREVIEW_CHARS)}\n…（参数过长，仅显示前 ${String(RAW_PREVIEW_CHARS)} 字符）`
+    return `${raw.slice(0, RAW_PREVIEW_CHARS)}\n${t('tool.tooLong', { count: RAW_PREVIEW_CHARS })}`
   }
   return prettyArguments(raw)
 })
@@ -78,11 +79,11 @@ const resultImages = computed(() => (props.item.result === undefined ? [] : imag
     </button>
     <div v-if="expanded" class="border-t border-outline-medium px-3 py-2 dark:border-white/10">
       <div v-if="item.args" class="mb-2">
-        <div class="mb-1 text-[11px] text-tertiary">参数</div>
+        <div class="mb-1 text-[11px] text-tertiary">{{ t('tool.args') }}</div>
         <pre class="max-h-64 overflow-auto rounded-xl bg-white/50 p-2 font-mono text-[12px] dark:bg-black/30" v-html="argsHtml" />
       </div>
       <div v-if="item.result !== undefined">
-        <div class="mb-1 text-[11px] text-tertiary">结果</div>
+        <div class="mb-1 text-[11px] text-tertiary">{{ t('tool.result') }}</div>
         <pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl bg-white/50 p-2 font-mono text-[12px] dark:bg-black/30" v-html="resultHtml" />
         <!-- A tool that wrote a screenshot usually just names the file: show it, not only the path. -->
         <div v-if="resultImages.length > 0" class="mt-2 flex flex-wrap gap-2">
@@ -97,7 +98,7 @@ const resultImages = computed(() => (props.item.result === undefined ? [] : imag
           />
         </div>
       </div>
-      <p v-if="item.error" class="text-[12px] text-danger">失败：{{ item.error }}</p>
+      <p v-if="item.error" class="text-[12px] text-danger">{{ t('tool.failed', { error: item.error }) }}</p>
     </div>
   </div>
 </template>

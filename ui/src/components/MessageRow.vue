@@ -7,6 +7,7 @@ import ToolCard from './ToolCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import FileCard from './FileCard.vue'
 import AppIcon from './AppIcon.vue'
+import { t } from '../lib/i18n.js'
 
 /** Compact number formatting: 1234 → 1.2k. */
 function compact (value) {
@@ -99,8 +100,8 @@ const groupState = computed(() => {
          
         >
           <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
-          <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-tertiary text-subtle">图片不可用</span>
-          <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-on-primary">加载中…</span>
+          <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-tertiary text-subtle">{{ t('message.imageUnavailable') }}</span>
+          <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-on-primary">{{ t('message.loading') }}</span>
         </button>
       </div>
       <template v-if="item.text && rendered">
@@ -124,7 +125,7 @@ const groupState = computed(() => {
           @click="openNote = openNote === index ? -1 : index"
         >
           <AppIcon name="info" :size="10" />
-          <span>上下文{{ item.notes.length > 1 ? ` ×${item.notes.length}` : '' }}</span>
+          <span>{{ t('message.context') }}{{ item.notes.length > 1 ? ` ×${item.notes.length}` : '' }}</span>
           <AppIcon name="chevron" :size="9" :class="openNote === index ? 'rotate-180' : ''" class="transition-transform" />
         </button>
       </div>
@@ -142,17 +143,17 @@ const groupState = computed(() => {
 
   <!-- One finished turn: what it cost, under the answer it produced. -->
   <div v-else-if="item.kind === 'turnStats'" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-tertiary text-subtle">
-    <span class="inline-flex items-center gap-1" title="本轮用时">
+    <span class="inline-flex items-center gap-1" :title="t('message.turnDuration')">
       <AppIcon name="clock" :size="11" />{{ item.seconds.toFixed(1) }}s
     </span>
-    <span class="inline-flex items-center gap-1" title="输出 tokens">
+    <span class="inline-flex items-center gap-1" :title="t('message.outputTokens')">
       <AppIcon name="cpu" :size="11" />{{ compact(item.output) }} tok
     </span>
-    <span v-if="item.perSecond > 0" class="inline-flex items-center gap-1" title="本轮平均生成速度">
+    <span v-if="item.perSecond > 0" class="inline-flex items-center gap-1" :title="t('message.avgSpeed')">
       ≈{{ item.perSecond.toFixed(1) }} tok/s
     </span>
-    <span title="输入 tokens（其中缓存读取）">↑{{ compact(item.input) }}<template v-if="item.cache > 0">（缓存 {{ compact(item.cache) }}）</template></span>
-    <span v-if="item.steps > 0" title="步数">{{ item.steps }} 步</span>
+    <span :title="t('message.inputTokens')">↑{{ compact(item.input) }}<template v-if="item.cache > 0">{{ t('message.cached', { count: compact(item.cache) }) }}</template></span>
+    <span v-if="item.steps > 0" :title="t('message.steps')">{{ t('message.stepsCount', { count: item.steps }) }}</span>
   </div>
 
   <!-- Harness-injected context: metadata, so it stays a subdued collapsed note. -->
@@ -164,8 +165,8 @@ const groupState = computed(() => {
       @click="showNote = !showNote"
     >
       <AppIcon name="info" :size="12" />
-      <span>上下文信息</span>
-      <span class="opacity-60">{{ item.text.length }} 字</span>
+      <span>{{ t('message.contextInfo') }}</span>
+      <span class="opacity-60">{{ t('message.chars', { count: item.text.length }) }}</span>
       <AppIcon name="chevron" :size="11" :class="showNote ? 'rotate-180' : ''" class="transition-transform" />
     </button>
     <div
@@ -188,8 +189,8 @@ const groupState = computed(() => {
         @click="showReasoning = !showReasoning"
       >
         <AppIcon name="brain" :size="13" />
-        <span>思维链</span>
-        <span class="opacity-60">{{ reasoning.length }} 字</span>
+        <span>{{ t('message.reasoning') }}</span>
+        <span class="opacity-60">{{ t('message.chars', { count: reasoning.length }) }}</span>
         <AppIcon name="chevron" :size="11" :class="showReasoning ? 'rotate-180' : ''" class="transition-transform" />
       </button>
       <div v-if="showReasoning" class="card reasoning-card pop mt-2 border-dashed px-3 py-2">
@@ -212,8 +213,8 @@ const groupState = computed(() => {
        
       >
         <img v-if="srcOf(image)" :src="srcOf(image)" :alt="image.name ?? ''" class="h-full w-full object-cover" />
-        <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-tertiary">图片不可用</span>
-        <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-tertiary">加载中…</span>
+        <span v-else-if="failedOf(image)" class="flex h-full w-full items-center justify-center text-[11px] text-tertiary">{{ t('message.imageUnavailable') }}</span>
+        <span v-else class="flex h-full w-full items-center justify-center text-[11px] text-tertiary">{{ t('message.loading') }}</span>
       </button>
     </div>
     <div v-if="item.files?.length" class="mt-1 flex flex-wrap gap-2">
@@ -233,8 +234,8 @@ const groupState = computed(() => {
       <span class="rounded-lg bg-fill-muted px-1.5 py-0.5 font-mono text-[11px] dark:bg-white/10">
         {{ item.count }} × {{ item.name }}
       </span>
-      <span class="min-w-0 flex-1 truncate text-[11px] text-tertiary">连续调用，点击展开</span>
-      <span v-if="groupState.failed > 0" class="shrink-0 text-[11px] text-danger">{{ groupState.failed }} 失败</span>
+      <span class="min-w-0 flex-1 truncate text-[11px] text-tertiary">{{ t('message.toolGroupHint') }}</span>
+      <span v-if="groupState.failed > 0" class="shrink-0 text-[11px] text-danger">{{ t('message.failures', { count: groupState.failed }) }}</span>
       <span
         class="h-1.5 w-1.5 shrink-0 rounded-full"
         :class="groupState.failed > 0 ? 'bg-status-failed' : groupState.running ? 'bg-status-running pulse' : 'bg-status-done'"

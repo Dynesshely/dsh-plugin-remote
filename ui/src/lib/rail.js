@@ -4,6 +4,8 @@
  * Kept free of the DOM so the navigation logic can be unit-tested without a browser.
  */
 
+import { t } from './i18n.js'
+
 /** Preferred height of one tick's interaction cell in px (dash + the space around it). */
 export const CELL_HEIGHT = 12
 /** Smallest cell that still keeps neighbouring dashes apart. */
@@ -25,7 +27,7 @@ export function promptTicks (items) {
     ticks.push({
       key: String(item.key),
       index: ticks.length,
-      label: `第 ${ticks.length + 1} 条 prompt`,
+      label: t('misc.railTick', { index: ticks.length + 1 }),
       preview: text,
       images,
     })

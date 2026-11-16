@@ -12,6 +12,8 @@ import ComboBox from './ComboBox.vue'
 import AppIcon from './AppIcon.vue'
 import { canCancel, canRetry, loadMessage, loadPhase, snapshotLine } from '../lib/loading.js'
 import { cancelOlder, retrySession, setLightweight } from '../lib/store.js'
+import { LANGUAGES, lang, setLang, t } from '../lib/i18n.js'
+import { activity } from '../lib/activity.js'
 import GLightbox from 'glightbox'
 import { setScrollRoot, renderRowNow, setProgrammaticScroll as setLazyProgrammaticScroll } from '../lib/lazy-render.js'
 import 'glightbox/dist/css/glightbox.min.css'
@@ -43,7 +45,7 @@ if (typeof window !== 'undefined' && window.__rcFancyboxBound !== true) {
 
 /** How the current Session load should read: skeleton, slow notice, or failure with a retry. */
 const sessionPhase = computed(() => loadPhase(state.sessionLoading, state.sessionSlow, state.sessionFailed))
-const sessionHint = computed(() => loadMessage(sessionPhase.value, '会话'))
+const sessionHint = computed(() => loadMessage(sessionPhase.value, t('loading.session')))
 /** Whether the snapshot notice should be on screen. */
 const snapshotVisible = computed(() => state.snapshotFlash
   || (state.sessionLoading === true && state.snapshotProgress.loaded > 0))
@@ -74,7 +76,8 @@ const usageDraft = ref([])
 /** The aggregated gateway source, edited alongside the direct providers. */
 const usageGateway = ref({ url: '', enabled: true, hasKey: false, hint: '', resolvedFrom: '', resolvedHint: '', key: '' })
 const usageSaving = ref(false)
-const usageSaved = ref('')
+/** Whether the last save succeeded: a flag, not the text, so the confirmation follows the language. */
+const usageSaved = ref(false)
 
 /** Load the usage providers, which arrive with keys reduced to a hint. */
 async function loadUsageConfig () {
@@ -107,7 +110,7 @@ async function loadUsageConfig () {
 /** Save the usage providers. A blank key field keeps whatever the Host already stores. */
 async function saveUsageConfig () {
   usageSaving.value = true
-  usageSaved.value = ''
+  usageSaved.value = false
   try {
     await api('/api/usage/config', {
       method: 'POST',
@@ -128,7 +131,7 @@ async function saveUsageConfig () {
         })),
       },
     })
-    usageSaved.value = '已保存'
+    usageSaved.value = true
     await loadUsageConfig()
   } catch (error) {
     state.actionError = String(error.message ?? error)
@@ -139,7 +142,7 @@ async function saveUsageConfig () {
 
 watch(settingsOpen, (open) => {
   if (open) {
-    usageSaved.value = ''
+    usageSaved.value = false
     void loadUsageConfig()
   }
 })
@@ -227,11 +230,12 @@ const showLiveReasoning = ref(false)
 const activePrompt = ref(-1)
 
 /** Theme choices for the self-drawn combobox in the top bar. */
-const THEMES = [
-  { value: 'system', name: '跟随系统', icon: 'autoTheme' },
-  { value: 'light', name: '浅色', icon: 'sun' },
-  { value: 'dark', name: '深色', icon: 'moon' },
-]
+/** Theme values are fixed; the labels follow the language. */
+const THEMES = computed(() => [
+  { value: 'system', name: t('theme.system'), icon: 'autoTheme' },
+  { value: 'light', name: t('theme.light'), icon: 'sun' },
+  { value: 'dark', name: t('theme.dark'), icon: 'moon' },
+])
 
 /**
  * Reload the Session on screen.
@@ -248,23 +252,29 @@ async function reloadCurrent () {
   await selectSession(state.selected)
 }
 
-/** @returns the colour, dot class and label for the Session's current run state. */
-const runTone = computed(() => {
-  if (state.sessionFailed || state.streamError !== '') {
-    return { text: 'text-danger', dot: 'bg-status-failed', label: state.streamError || '加载失败' }
-  }
-  if (state.telemetry.running) return { text: 'text-primary', dot: 'bg-status-running pulse', label: '正在运行' }
-  if (state.telemetry.awaiting === true || state.pending?.questions?.length > 0 || state.pending?.approvals?.length > 0) {
-    return { text: 'text-warning-on', dot: 'bg-status-attention pulse', label: '需要你的回应' }
-  }
-  return { text: 'text-tertiary', dot: 'bg-status-done', label: '已完成' }
-})
+/** @returns the text colour for the current activity, from the shared status vocabulary. */
+const activityTone = computed(() => ({
+  running: 'text-primary',
+  attention: 'text-warning-on',
+  failed: 'text-danger',
+  done: 'text-tertiary',
+}[activity.value.tone] ?? 'text-tertiary'))
 
-/** 皮肤选择：与主题并排放在设置的「外观」区。 */
-const SKINS = [
-  { value: 'glass', name: '液态玻璃', icon: 'layers' },
-  { value: 'md3', name: 'Material Design 3', icon: 'layers' },
-]
+/**
+ * Width class for the header's two pickers.
+ *
+ * They used to hide their labels at a viewport breakpoint. A breakpoint says "this window is below a size", not
+ * "this label does not fit" — so a window merely narrower than the widest tier dropped both labels while the
+ * header still had room for them. `min-w-0` with a cap lets the label shrink to whatever is actually left, and
+ * the icon stays either way, so the control is always identifiable.
+ */
+const headerWidth = computed(() => (mobile.value ? 'w-11 justify-center gap-1 px-1.5' : 'min-w-0 max-w-[8.5rem]'))
+
+/** 皮肤选择：与主题并排放在设置的「外观」区。值固定，显示名随语言切换。 */
+const SKINS = computed(() => [
+  { value: 'glass', name: t('skin.glass'), icon: 'layers' },
+  { value: 'md3', name: t('skin.md3'), icon: 'layers' },
+])
 
 /** One rail tick per user prompt. */
 const prompts = computed(() => promptTicks(transcriptItems.value))
@@ -570,8 +580,15 @@ const LIVE_FENCE_SCAN_MAX = 200000
  * 切在行中间：代价只是首行被当成新段落，规模却仍然钉死在窗口大小上。
  */
 const LIVE_SNAP_MAX = 2000
-/** 窗口提示：内联样式，避免为一个临时提示去动样式表。 */
-const LIVE_WINDOW_HINT = '<p style="margin:0 0 0.5em;font-size:11px;opacity:0.65">…（生成中，仅显示最新内容）</p>'
+/**
+ * 窗口提示：内联样式，避免为一个临时提示去动样式表。
+ *
+ * 写成函数而不是常量，文案才能跟随语言切换；包裹的 HTML 结构与原来完全一致。
+ * @returns 前插到被裁剪的流式渲染结果前面的提示段落。
+ */
+function liveWindowHint () {
+  return `<p style="margin:0 0 0.5em;font-size:11px;opacity:0.65">${t('pane.liveWindowHint')}</p>`
+}
 
 /** 渲染结果的容器，模板里用 `v-html` 挂上去。 */
 const liveHtml = ref('')
@@ -635,7 +652,7 @@ function renderStream (text) {
   if (text === '') return ''
   const windowed = state.telemetry.running === true ? liveWindow(text) : { text, clipped: false }
   const html = renderMarkdown(windowed.text)
-  return windowed.clipped ? LIVE_WINDOW_HINT + html : html
+  return windowed.clipped ? liveWindowHint() + html : html
 }
 
 /**
@@ -727,50 +744,63 @@ onBeforeUnmount(() => {
 <template>
   <section class="flex h-full min-h-0 flex-col">
     <header class="z-10 m-2 mb-0 flex items-center gap-2 rounded-[18px] border border-outline-medium bg-white/25 px-2.5 py-2 dark:border-white/10 dark:bg-white/[0.03]">
-      <button class="icon-btn" type="button" title="展开/收起侧栏" @click="emit('toggleSidebar')">
+      <button class="icon-btn" type="button" :title="t('toolbar.toggleSidebar')" @click="emit('toggleSidebar')">
         <AppIcon name="menu" :size="16" />
       </button>
       <!-- Run state lives here: the dot was already in this header, so the status strip below the
            composer no longer repeats it — it only gains the word while a turn is actually running. -->
       <!--
-        Run state uses the shared vocabulary: blue while a turn is running, green once it has finished, yellow
-        when the reader has to act, red when it ended badly. The dot was green for "running", which read as
-        "already done" — the opposite of what it meant.
+        What the agent is doing, not just that it is doing something. The dot only said "busy"; thinking, calling
+        a tool and writing a reply are three different waits, and a reader watching a slow turn wants to know
+        which one they are in.
       -->
       <span
         class="flex shrink-0 items-center gap-1.5"
-        :class="runTone.text"
-        :title="runTone.label"
+        :class="activityTone"
+        :title="activity.label"
       >
-        <span class="h-2 w-2 shrink-0 rounded-full" :class="runTone.dot" />
-        <span v-if="state.telemetry.running" class="text-[11px] font-medium">运行中</span>
+        <AppIcon
+          :name="activity.icon"
+          :size="13"
+          class="shrink-0"
+          :class="activity.busy ? 'animate-pulse' : ''"
+        />
+        <span class="max-w-[9rem] truncate text-[11px] font-medium">{{ activity.label }}</span>
       </span>
       <h1 class="min-w-0 flex-1 truncate text-sm font-medium">
-        {{ selectedSession?.title ?? '未选择会话' }}
+        {{ selectedSession?.title ?? t('toolbar.noSession') }}
       </h1>
       <ComboBox
         :model-value="theme"
         :items="THEMES"
         icon="autoTheme"
         align="right"
-        :width="mobile ? 'w-12 justify-center gap-1 px-1.5' : 'max-w-[8.5rem]'"
-        :label-class="mobile ? 'hidden' : ''"
+        :width="headerWidth"
         @update:model-value="emit('update:theme', $event)"
+      />
+      <ComboBox
+        :model-value="lang"
+        :items="LANGUAGES"
+        icon="earth"
+        align="right"
+        :width="headerWidth"
+        :title="t('toolbar.language')"
+        @update:model-value="setLang"
       />
       <button
         class="icon-btn"
         type="button"
-        title="重新加载当前会话"
-        aria-label="重新加载当前会话"
+        :title="t('toolbar.refresh')"
+        :aria-label="t('toolbar.refresh')"
         :disabled="state.selected === undefined || state.sessionLoading"
         @click="reloadCurrent"
       >
         <AppIcon name="refresh" :size="15" :class="state.sessionLoading ? 'animate-spin' : ''" />
       </button>
-      <button class="icon-btn" type="button" title="设置" @click="settingsOpen = true">
+      <button class="icon-btn" type="button" :title="t('toolbar.settings')" @click="settingsOpen = true">
         <AppIcon name="gear" :size="15" />
       </button>
-      <button class="icon-btn" type="button" title="右侧栏" @click="emit('toggleFiles')">
+      <button class="icon-btn" type="button" :title="t('toolbar.toggleFiles')" @click="emit('toggleFiles')">
         <AppIcon name="sidebar" :size="15" />
       </button>
     </header>
@@ -784,15 +814,15 @@ onBeforeUnmount(() => {
       >
         <div class="panel pop max-h-[80dvh] w-full max-w-md overflow-y-auto p-4">
           <div class="mb-3 flex items-center justify-between">
-            <h2 class="text-sm font-medium">设置</h2>
-            <button class="icon-btn h-7 w-7" type="button" title="关闭" @click="settingsOpen = false">
+            <h2 class="text-sm font-medium">{{ t('settings.title') }}</h2>
+            <button class="icon-btn h-7 w-7" type="button" :title="t('action.close')" @click="settingsOpen = false">
               <AppIcon name="close" :size="13" />
             </button>
           </div>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">外观</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">{{ t('settings.appearance') }}</p>
           <div class="mb-3 flex items-center justify-between gap-3">
-            <span class="text-[13px]">主题</span>
+            <span class="text-[13px]">{{ t('toolbar.theme') }}</span>
             <ComboBox
               :model-value="theme"
               :items="THEMES"
@@ -803,7 +833,7 @@ onBeforeUnmount(() => {
             />
           </div>
           <div class="mb-3 flex items-center justify-between gap-3">
-            <span class="text-[13px]">皮肤</span>
+            <span class="text-[13px]">{{ t('toolbar.skin') }}</span>
             <ComboBox
               :model-value="skin"
               :items="SKINS"
@@ -814,13 +844,13 @@ onBeforeUnmount(() => {
             />
           </div>
           <label class="mb-3 flex items-center justify-between gap-3 text-[13px]">
-            <span>紧凑消息间距</span>
+            <span>{{ t('settings.dense') }}</span>
             <input v-model="dense" type="checkbox" class="h-3.5 w-3.5" />
           </label>
           <label class="mb-3 flex items-start justify-between gap-3 text-[13px]">
             <span class="min-w-0">
-              省流模式
-              <span class="mt-0.5 block text-[11px] text-tertiary">不加载图片附件，并关闭毛玻璃与动效，适合弱网</span>
+              {{ t('settings.lightweight') }}
+              <span class="mt-0.5 block text-[11px] text-tertiary">{{ t('settings.lightweightHint') }}</span>
             </span>
             <input
               :checked="state.lightweight"
@@ -830,79 +860,79 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">连接</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">{{ t('settings.connection') }}</p>
           <dl class="mb-3 space-y-1 text-[12px] text-secondary">
             <div class="flex justify-between gap-3">
-              <dt>监听</dt>
+              <dt>{{ t('settings.bind') }}</dt>
               <dd class="truncate">{{ state.bind || '—' }}</dd>
             </div>
             <div class="flex justify-between gap-3">
-              <dt>流状态</dt>
-              <dd>{{ state.streamError ? state.streamError : '已连接' }}</dd>
+              <dt>{{ t('settings.streamStatus') }}</dt>
+              <dd>{{ state.streamError ? state.streamError : t('sidebar.connected') }}</dd>
             </div>
             <div class="flex justify-between gap-3">
-              <dt>会话</dt>
+              <dt>{{ t('settings.session') }}</dt>
               <dd class="truncate">{{ state.selected ?? '—' }}</dd>
             </div>
           </dl>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">用量与余额</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">{{ t('usage.title') }}</p>
           <p class="mb-2 text-[11px] leading-relaxed text-secondary">
-            由宿主代为请求（浏览器受同源策略限制），密钥只存在宿主侧（<code class="font-mono">~/.dsh/remote-control/usage.json</code>，权限 0600），页面只会看到掩码。
+            {{ t('settings.usageNotePre') }}<code class="font-mono">~/.dsh/remote-control/usage.json</code>{{ t('settings.usageNotePost') }}
           </p>
           <div class="mb-2 rounded-xl border border-primary bg-primary-container p-2 border-primary bg-primary-container">
             <div class="mb-1.5 flex items-center gap-2">
               <input v-model="usageGateway.enabled" type="checkbox" class="h-3.5 w-3.5" />
-              <span class="text-[13px]">网关聚合（推荐）</span>
+              <span class="text-[13px]">{{ t('settings.gatewayToggle') }}</span>
               <span class="ml-auto text-[10px] text-tertiary">
-                {{ usageGateway.resolvedFrom === 'dsh' ? '密钥取自 DSH 凭据 ' + usageGateway.resolvedHint
-                  : usageGateway.resolvedFrom === 'config' ? '密钥来自此处设置'
-                    : '未找到密钥' }}
+                {{ usageGateway.resolvedFrom === 'dsh' ? t('settings.keyFromDsh', { hint: usageGateway.resolvedHint })
+                  : usageGateway.resolvedFrom === 'config' ? t('settings.keyFromConfig')
+                    : t('settings.keyMissing') }}
               </span>
             </div>
-            <input v-model="usageGateway.url" class="field mb-1.5 py-1 text-[12px]" placeholder="聚合用量接口地址" />
+            <input v-model="usageGateway.url" class="field mb-1.5 py-1 text-[12px]" :placeholder="t('settings.gatewayUrl')" />
             <input
               v-model="usageGateway.key"
               type="password"
               class="field py-1 text-[12px]"
-              placeholder="留空则使用 DSH 中 PORTARA_AI_GATEWAY_API_KEY"
+              :placeholder="t('settings.gatewayKey')"
             />
             <p class="mt-1.5 text-[10px] leading-relaxed text-secondary">
-              网关会代查各家余额与用量，并把它代理过的模型的实际用量一并汇总，因此这里只需一个地址。
+              {{ t('settings.gatewayHint') }}
             </p>
           </div>
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">直连（网关关闭时使用）</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">{{ t('settings.direct') }}</p>
           <div v-for="provider in usageDraft" :key="provider.id" class="mb-2 rounded-xl border border-outline-medium p-2 dark:border-white/10">
             <div class="mb-1.5 flex items-center gap-2">
               <input v-model="provider.enabled" type="checkbox" class="h-3.5 w-3.5" />
               <span class="text-[13px]">{{ provider.label }}</span>
               <span class="ml-auto text-[10px] text-tertiary">
-                {{ provider.hasKey ? `已存密钥 ${provider.hint}` : '未设置密钥' }}
+                {{ provider.hasKey ? t('settings.keyStored', { hint: provider.hint }) : t('settings.keyUnset') }}
               </span>
             </div>
-            <input v-model="provider.url" class="field mb-1.5 py-1 text-[12px]" placeholder="用量接口地址，例如 https://…/user/balance" />
+            <input v-model="provider.url" class="field mb-1.5 py-1 text-[12px]" :placeholder="t('settings.providerUrl')" />
             <input
               v-model="provider.key"
               type="password"
               class="field py-1 text-[12px]"
-              :placeholder="provider.hasKey ? '留空则保持现有密钥' : 'API Key'"
+              :placeholder="provider.hasKey ? t('settings.keepKey') : 'API Key'"
             />
           </div>
           <div class="mb-3 flex items-center gap-2">
             <button class="btn" type="button" :disabled="usageSaving" @click="saveUsageConfig">
-              {{ usageSaving ? '保存中…' : '保存用量设置' }}
+              {{ usageSaving ? t('settings.saving') : t('settings.saveUsage') }}
             </button>
-            <span v-if="usageSaved !== ''" class="text-[11px] text-success-on text-success-on">{{ usageSaved }}</span>
+            <span v-if="usageSaved" class="text-[11px] text-success-on text-success-on">{{ t('settings.saved') }}</span>
           </div>
 
           <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">DSH</p>
           <p class="mb-3 text-[12px] leading-relaxed text-secondary">
-            重启与退出在左侧 DSH 菜单里（点击侧栏顶部的图标）。它们由一个独立进程完成，因为退出会连同本页面所依赖的宿主一起结束。
+            {{ t('settings.dshHint') }}
           </p>
 
-          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">关于</p>
+          <p class="mb-1.5 text-[11px] font-medium tracking-wide text-tertiary">{{ t('sidebar.about') }}</p>
           <p class="text-[12px] leading-relaxed text-secondary">
-            远程遥控插件 v1.0.0 · 页面与宿主同源、由令牌保护。更多设置项待定，这里先放上已经可用的部分。
+            {{ t('settings.aboutText') }}
           </p>
         </div>
       </div>
@@ -913,7 +943,7 @@ onBeforeUnmount(() => {
       class="mx-2 mt-2 flex items-center gap-2 rounded-xl border border-warning-on bg-warning-soft px-3 py-1 text-[12px] text-warning-on backdrop-blur-xl border-warning-on bg-warning-soft text-warning-on"
     >
       <span class="min-w-0 flex-1">{{ state.streamError }}</span>
-      <button class="shrink-0 underline" type="button" @click="retrySession">重试</button>
+      <button class="shrink-0 underline" type="button" @click="retrySession">{{ t('action.retry') }}</button>
     </div>
 
     <div class="relative min-h-0 flex-1">
@@ -961,14 +991,14 @@ onBeforeUnmount(() => {
                   :size="12"
                   :class="state.loadingOlder ? 'animate-spin' : 'rotate-90'"
                 />
-                <span>{{ state.loadingOlder ? (state.olderSlow ? '网络较慢，仍在加载…' : '加载中…') : '加载更早的消息' }}</span>
+                <span>{{ state.loadingOlder ? (state.olderSlow ? t('pane.loadingSlow') : t('message.loading')) : t('pane.loadingOlder') }}</span>
               </button>
               <!-- A slow link should not trap the reader in a request they cannot stop. -->
-              <button v-if="state.loadingOlder" class="chip" type="button" @click="cancelOlder">取消</button>
+              <button v-if="state.loadingOlder" class="chip" type="button" @click="cancelOlder">{{ t('action.cancel') }}</button>
             </div>
             <p v-if="state.olderError !== ''" class="text-[12px] text-danger">
               {{ state.olderError }}
-              <button class="ml-1 underline" type="button" @click="loadEarlier">重试</button>
+              <button class="ml-1 underline" type="button" @click="loadEarlier">{{ t('action.retry') }}</button>
             </p>
           </div>
           <!-- Loading a Session looks like the shape of what is coming, rather than claiming the Session
@@ -981,7 +1011,7 @@ onBeforeUnmount(() => {
           >
             <p class="flex items-center gap-2 text-[12px] text-tertiary">
               <AppIcon name="refresh" :size="12" class="animate-spin" />
-              <span>{{ sessionHint === '' ? '正在载入会话…' : sessionHint }}</span>
+              <span>{{ sessionHint === '' ? t('pane.loadingSession') : sessionHint }}</span>
             </p>
             <div class="card rc-shimmer space-y-2 p-3">
               <div class="h-2.5 w-2/3 rounded-full bg-black/10 dark:bg-white/10" />
@@ -1002,19 +1032,19 @@ onBeforeUnmount(() => {
             class="flex flex-col items-center gap-3 py-16 text-center"
           >
             <p class="text-sm text-warning-on text-warning-on">{{ sessionHint }}</p>
-            <button class="btn btn-primary" type="button" @click="retrySession">重试</button>
+            <button class="btn btn-primary" type="button" @click="retrySession">{{ t('action.retry') }}</button>
           </div>
           <p
             v-else-if="transcriptItems.length === 0 && state.events.length > 0 && !state.live.text"
             class="px-6 py-16 text-center text-sm text-warning-on text-warning-on"
           >
-            已载入 {{ state.events.length }} 条事件，但没有可显示的内容（可能是解析异常）。
+            {{ t('pane.eventsWithoutContent', { count: state.events.length }) }}
           </p>
           <p
             v-else-if="transcriptItems.length === 0 && !state.live.text"
             class="py-16 text-center text-sm text-tertiary"
           >
-            {{ state.selected === undefined ? '从左侧选择一个会话' : '这个会话还没有消息' }}
+            {{ state.selected === undefined ? t('pane.pickSession') : t('pane.emptySession') }}
           </p>
           <div v-for="item in transcriptItems" :key="item.key" :data-item-key="item.key">
             <!-- The prompt the run is currently working on gets the animated iridescent ring. -->
@@ -1031,8 +1061,8 @@ onBeforeUnmount(() => {
                 @click="showLiveReasoning = !showLiveReasoning"
               >
                 <AppIcon name="brain" :size="13" />
-                <span>思维链</span>
-                <span class="opacity-60">{{ state.live.reasoning.length }} 字 · 生成中</span>
+                <span>{{ t('message.reasoning') }}</span>
+                <span class="opacity-60">{{ t('pane.liveChars', { count: state.live.reasoning.length }) }}</span>
                 <AppIcon name="chevron" :size="11" :class="showLiveReasoning ? 'rotate-180' : ''" class="transition-transform" />
               </button>
               <div

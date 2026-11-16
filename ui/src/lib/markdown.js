@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { marked } from './marked-setup.js'
+import { t } from './i18n.js'
 
 /**
  * Render assistant text (or a reasoning chain) as sanitized HTML.
@@ -194,7 +195,7 @@ export function renderMarkdown (text) {
   if (clamped.omitted === 0) return safe
   // 提示拼接在净化之后：它是本模块自己的固定文本，不含任何模型输出，不需要再过一次 DOMPurify。
   // 后半句给出原文长度，读者才知道自己少看了多少。
-  return `${safe}<p class="rc-md-truncated">内容较长，仅渲染前 ${String(clamped.text.length)} 字符（原文 ${String(source.length)} 字符）</p>`
+  return `${safe}<p class="rc-md-truncated">${t('misc.mdTruncated', { shown: String(clamped.text.length), total: String(source.length) })}</p>`
 }
 
 /** @returns the first line of a possibly long string, trimmed for a collapsed header. */

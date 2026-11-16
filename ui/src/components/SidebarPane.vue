@@ -20,6 +20,7 @@ import UsageCard from './UsageCard.vue'
 import { Pin } from 'lucide-vue-next'
 import AppIcon from './AppIcon.vue'
 import ComboBox from './ComboBox.vue'
+import { t } from '../lib/i18n.js'
 
 const emit = defineEmits(['select', 'close'])
 
@@ -228,7 +229,7 @@ function open (id) {
 function ago (updatedAt) {
   if (!Number.isFinite(updatedAt) || updatedAt <= 0) return ''
   const minutes = Math.floor((Date.now() - updatedAt) / 60_000)
-  if (minutes < 1) return '刚刚'
+  if (minutes < 1) return t('sidebar.justNow')
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours}h`
@@ -377,8 +378,8 @@ async function controlDsh (mode) {
   try {
     await api(`/api/dsh/${mode}`, { method: 'POST', body: { port: controlPort() } })
     state.actionError = mode === 'restart'
-      ? 'DSH 正在重启，页面会在它回来后自动重连'
-      : 'DSH 正在退出，本页面将失去连接'
+      ? t('sidebar.restarting')
+      : t('sidebar.exiting')
   } catch (error) {
     state.actionError = String(error.message ?? error)
   } finally {
@@ -390,10 +391,10 @@ async function controlDsh (mode) {
 function entriesFor (session) {
   const archived = state.archivedSessionIds.includes(session.id)
   return [
-    { kind: archived ? 'unarchive' : 'archive', label: archived ? '取消归档' : '归档会话', icon: 'layers' },
-    { kind: 'pin', label: isPinned(session.id) ? '取消置顶' : '置顶会话', icon: 'pin' },
-    { kind: 'rename', label: '重命名', icon: 'pencil' },
-    { kind: 'fork', label: '从最后已结束轮次分叉', icon: 'fork' },
+    { kind: archived ? 'unarchive' : 'archive', label: archived ? t('sidebar.unarchive') : t('sidebar.archiveSession'), icon: 'layers' },
+    { kind: 'pin', label: isPinned(session.id) ? t('sidebar.unpin') : t('sidebar.pin'), icon: 'pin' },
+    { kind: 'rename', label: t('action.rename'), icon: 'pencil' },
+    { kind: 'fork', label: t('sidebar.fork'), icon: 'fork' },
   ]
 }
 </script>
@@ -409,7 +410,7 @@ function entriesFor (session) {
         type="button"
         class="brand-tile h-8 w-8 transition-transform duration-200 hover:scale-105 active:scale-95"
         :class="dshOpen ? 'ring-2 ring-primary' : ''"
-        title="DSH 菜单"
+        :title="t('sidebar.dshMenu')"
         @click="openDsh"
       >
         <!-- \`object-contain\` (not \`cover\`): the artwork already carries its own transparent margin, so
@@ -420,9 +421,9 @@ function entriesFor (session) {
       <span
         class="h-2 w-2 shrink-0 rounded-full"
         :class="state.streamError ? 'bg-status-attention pulse' : 'bg-status-done'"
-        :title="state.streamError || '已连接'"
+        :title="state.streamError || t('sidebar.connected')"
       />
-      <button class="icon-btn h-7 w-7" type="button" title="收起侧栏" @click="emit('close')">
+      <button class="icon-btn h-7 w-7" type="button" :title="t('sidebar.collapse')" @click="emit('close')">
         <AppIcon name="close" :size="13" />
       </button>
     </div>
@@ -430,7 +431,7 @@ function entriesFor (session) {
     <div class="px-3 pb-2">
       <div class="relative">
         <AppIcon name="search" :size="14" class="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-tertiary" />
-        <input v-model="query" class="field pl-9" placeholder="搜索会话" />
+        <input v-model="query" class="field pl-9" :placeholder="t('sidebar.search')" />
       </div>
       <!-- New Session sits next to the search box, and asks for the workspace and the mode. -->
       <button
@@ -440,7 +441,7 @@ function entriesFor (session) {
         @click="openCreate()"
       >
         <AppIcon name="plus" :size="14" />
-        <span>新建会话</span>
+        <span>{{ t('sidebar.newSession') }}</span>
       </button>
     </div>
 
@@ -472,7 +473,7 @@ function entriesFor (session) {
           </span>
           <span class="min-w-0 flex-1">
             <span class="block truncate text-[13px] font-semibold text-strong">
-              {{ group.title || group.path || '工作区' }}
+              {{ group.title || group.path || t('sidebar.workspace') }}
             </span>
             <span v-if="group.path" class="block truncate text-[10px] font-normal text-tertiary">
               {{ group.path }}
@@ -512,12 +513,12 @@ function entriesFor (session) {
                 <span
                   v-if="session.running"
                   class="h-1.5 w-1.5 rounded-full bg-status-running pulse"
-                  title="正在运行"
+                  :title="t('sidebar.running')"
                 />
                 <span
                   v-else-if="isSessionUnread(session.id)"
                   class="h-1.5 w-1.5 rounded-full bg-status-done"
-                  title="已完成，尚未查看"
+                  :title="t('sidebar.unread')"
                 />
               </span>
               <input
@@ -538,14 +539,14 @@ function entriesFor (session) {
                 :size="13"
                 :stroke-width="2"
                 class="shrink-0 text-primary text-primary"
-                title="已置顶"
+                :title="t('sidebar.pinned')"
               />
             </button>
             <button
               type="button"
               class="grid h-6 w-6 shrink-0 place-items-center rounded-lg text-tertiary opacity-0 transition-opacity group-hover/row:opacity-100 focus:opacity-100"
               :class="menuFor === session.id ? 'opacity-100' : ''"
-              :title="'会话操作'"
+              :title="t('sidebar.sessionActions')"
               @click.stop="openMenu(session, $event)"
             >
               <AppIcon name="more" :size="14" />
@@ -561,7 +562,7 @@ function entriesFor (session) {
             @click.stop="expandGroup(group.id)"
           >
             <AppIcon name="chevron" :size="11" class="-rotate-90" />
-            <span>展开全部（还有 {{ hiddenCountOf(group) }} 个）</span>
+            <span>{{ t('sidebar.expandAll', { count: hiddenCountOf(group) }) }}</span>
           </button>
           <button
             v-else-if="isExpanded(group)"
@@ -571,7 +572,7 @@ function entriesFor (session) {
             @click.stop="collapseGroup(group.id)"
           >
             <AppIcon name="chevron" :size="11" class="rotate-180" />
-            <span>收起</span>
+            <span>{{ t('sidebar.collapseAll') }}</span>
           </button>
         </div>
       </div>
@@ -586,7 +587,7 @@ function entriesFor (session) {
           @click="archivedOpen = !archivedOpen"
         >
           <AppIcon name="chevron" :size="12" class="transition-transform duration-200" :class="archivedOpen ? '' : '-rotate-90'" />
-          <span class="flex-1">已归档</span>
+          <span class="flex-1">{{ t('sidebar.archived') }}</span>
           <span class="rounded-full bg-fill-tint px-1.5 text-[10px]">{{ view.archived.length }}</span>
         </button>
         <div v-if="archivedOpen" class="session-rail mt-1 ml-[1.15rem] space-y-0.5 border-l border-outline pl-2.5">
@@ -599,13 +600,13 @@ function entriesFor (session) {
               <AppIcon name="layers" :size="12" class="shrink-0 opacity-60" />
               <span class="min-w-0 flex-1 truncate">{{ session.title || session.id }}</span>
             </button>
-            <button type="button" class="chip px-2 py-0 text-[10px]" @click.stop="setArchived(session.id, false)">取消归档</button>
+            <button type="button" class="chip px-2 py-0 text-[10px]" @click.stop="setArchived(session.id, false)">{{ t('sidebar.unarchive') }}</button>
           </div>
         </div>
       </div>
 
       <p v-if="view.groups.length === 0 && view.archived.length === 0" class="px-3 py-6 text-center text-xs text-tertiary">
-        没有匹配的会话
+        {{ t('sidebar.noMatches') }}
       </p>
     </div>
 
@@ -626,7 +627,7 @@ function entriesFor (session) {
           @click="controlDsh('restart')"
         >
           <AppIcon name="restart" :size="14" class="opacity-70" />
-          <span class="flex-1">{{ armed === 'restart' ? '再次点击确认重启' : '重启 DSH' }}</span>
+          <span class="flex-1">{{ armed === 'restart' ? t('sidebar.confirmRestart') : t('sidebar.restartDsh') }}</span>
         </button>
         <button
           type="button"
@@ -635,22 +636,22 @@ function entriesFor (session) {
           @click="controlDsh('exit')"
         >
           <AppIcon name="power" :size="14" class="opacity-80" />
-          <span class="flex-1">{{ armed === 'exit' ? '再次点击确认退出' : '退出 DSH' }}</span>
+          <span class="flex-1">{{ armed === 'exit' ? t('sidebar.confirmExit') : t('sidebar.exitDsh') }}</span>
         </button>
         <div class="mx-2 my-1.5 border-t border-outline-medium" />
         <div class="px-2.5 py-1.5 text-[11px] leading-relaxed text-secondary">
-          <p class="mb-1 font-medium text-tertiary">关于</p>
-          <p>远程遥控插件 · v1.0.0</p>
-          <p>监听 {{ state.bind || '—' }}</p>
+          <p class="mb-1 font-medium text-tertiary">{{ t('sidebar.about') }}</p>
+          <p>{{ t('sidebar.pluginName') }}</p>
+          <p>{{ t('sidebar.listening', { bind: state.bind || '—' }) }}</p>
           <template v-if="info !== undefined">
-            <p v-if="info.error" class="text-danger">读取失败：{{ info.error }}</p>
+            <p v-if="info.error" class="text-danger">{{ t('sidebar.readFailed', { error: info.error }) }}</p>
             <template v-else>
               <p>DSH pid {{ info.pid }} · node {{ info.node }}<span v-if="info.electron"> · electron {{ info.electron }}</span></p>
-              <p class="break-all">启动器 {{ info.launcher }}</p>
-              <p v-if="info.launcherExists === false" class="text-danger">启动器不存在，重启会失败</p>
+              <p class="break-all">{{ t('sidebar.launcher', { launcher: info.launcher }) }}</p>
+              <p v-if="info.launcherExists === false" class="text-danger">{{ t('sidebar.launcherMissing') }}</p>
             </template>
           </template>
-          <p v-else class="opacity-60">正在读取…</p>
+          <p v-else class="opacity-60">{{ t('sidebar.reading') }}</p>
         </div>
       </div>
     </Teleport>
@@ -685,10 +686,10 @@ function entriesFor (session) {
         @click.self="dialog = undefined"
       >
         <div class="panel pop w-full max-w-sm p-4">
-          <h3 class="mb-3 text-sm font-medium">{{ dialog.kind === 'create' ? '新建会话' : dialog.kind === 'rename' ? '重命名会话' : (dialog.archived ? '归档会话' : '取消归档') }}</h3>
+          <h3 class="mb-3 text-sm font-medium">{{ dialog.kind === 'create' ? t('sidebar.newSession') : dialog.kind === 'rename' ? t('sidebar.renameSession') : (dialog.archived ? t('sidebar.archiveSession') : t('sidebar.unarchive')) }}</h3>
           <template v-if="dialog.kind === 'create'">
-            <ComboBox v-model="dialog.workspaceId" :items="workspaceOptions" placeholder="选择工作区" icon="layers" width="w-full" />
-            <p class="mt-4 mb-1.5 text-[11px] text-tertiary">模式</p>
+            <ComboBox v-model="dialog.workspaceId" :items="workspaceOptions" :placeholder="t('sidebar.pickWorkspace')" icon="layers" width="w-full" />
+            <p class="mt-4 mb-1.5 text-[11px] text-tertiary">{{ t('sidebar.mode') }}</p>
             <div class="max-h-[46dvh] space-y-1 overflow-y-auto">
               <button
                 v-for="preset in state.presets"
@@ -704,28 +705,28 @@ function entriesFor (session) {
                 </span>
                 <AppIcon v-if="(dialog.presetId ?? state.presets[0]?.id) === preset.id" name="check" :size="14" class="mt-0.5 shrink-0 text-primary" />
               </button>
-              <p v-if="state.presets.length === 0" class="px-2 py-1 text-xs text-tertiary">没有可用的模式</p>
+              <p v-if="state.presets.length === 0" class="px-2 py-1 text-xs text-tertiary">{{ t('sidebar.noPresets') }}</p>
             </div>
           </template>
           <input
             v-if="dialog.kind === 'rename'"
             v-model="dialog.title"
             class="field"
-            placeholder="会话标题"
+            :placeholder="t('sidebar.sessionTitle')"
             @keydown.enter.prevent="commitDialog"
           />
           <template v-else>
             <p v-if="dialog.archived" class="text-[13px] text-secondary">
-              归档后它会从列表移到「已归档」，随时可以取消归档。
+              {{ t('sidebar.archiveHint') }}
             </p>
             <label v-if="dialog.archived" class="mt-3 flex items-center gap-2 text-[13px]">
               <input v-model="dialog.stopActivity" type="checkbox" class="h-3.5 w-3.5" />
-              同时停止正在运行的工作
+              {{ t('sidebar.stopActivity') }}
             </label>
           </template>
           <div class="mt-4 flex justify-end gap-2">
-            <button type="button" class="btn" @click="dialog = undefined">取消</button>
-            <button type="button" class="btn btn-primary" @click="commitDialog">确定</button>
+            <button type="button" class="btn" @click="dialog = undefined">{{ t('action.cancel') }}</button>
+            <button type="button" class="btn btn-primary" @click="commitDialog">{{ t('action.confirm') }}</button>
           </div>
         </div>
       </div>

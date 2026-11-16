@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import ModelMark from './ModelMark.vue'
 
@@ -23,7 +24,7 @@ const props = defineProps({
   listHeight: { type: String, default: '' },
   /** Options: `{ value, name, description?, icon?, group? }`. */
   items: { type: Array, default: () => [] },
-  placeholder: { type: String, default: '选择' },
+  placeholder: { type: String, default: '' },
   /** Glyph shown before the current label. */
   icon: { type: String, default: '' },
   /** Open upwards, for controls that live in the composer. */
@@ -264,7 +265,7 @@ watch(open, (value) => {
       <AppIcon v-else-if="current?.icon" :name="current.icon" :size="13" />
       <!-- The clipped wrapper keeps the row narrow; the inner span is what scrolls on hover. -->
       <span class="min-w-0 flex-1 overflow-hidden text-left" :class="labelClass">
-        <span class="rc-marquee">{{ current?.name ?? placeholder }}</span>
+        <span class="rc-marquee">{{ current?.name ?? (placeholder || t('combo.select')) }}</span>
       </span>
       <AppIcon name="chevron" :size="12" class="opacity-50 transition-transform duration-200" :class="open ? 'rotate-180' : ''" />
     </button>
@@ -290,7 +291,7 @@ watch(open, (value) => {
             v-model="query"
             type="text"
             class="field py-1.5 text-[13px]"
-            placeholder="搜索模型"
+            :placeholder="t('combo.search')"
             @keydown="onKeydown"
           />
         </div>
@@ -332,7 +333,7 @@ watch(open, (value) => {
             </button>
           </template>
           <p v-if="filtered.length === 0" class="px-2.5 py-2 text-xs text-tertiary">
-            {{ searchable && query.trim() !== '' ? '没有匹配的模型' : '暂无选项' }}
+            {{ searchable && query.trim() !== '' ? t('combo.noMatch') : t('combo.noOptions') }}
           </p>
         </div>
 

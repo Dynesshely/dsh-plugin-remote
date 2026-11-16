@@ -1,3 +1,4 @@
+import { t } from './i18n.js'
 /**
  * The loading phases a surface goes through, and what to say in each.
  *
@@ -32,8 +33,8 @@ export function loadPhase (loading, slow, failed) {
  * words — a link that is clearly slow, or a load that failed.
  */
 export function loadMessage (phase, label) {
-  if (phase === 'slow') return `网络较慢，正在继续载入${label}…`
-  if (phase === 'failed') return `${label}载入失败`
+  if (phase === 'slow') return t('loading.slow', { label })
+  if (phase === 'failed') return t('loading.failed', { label })
   return ''
 }
 
@@ -89,14 +90,14 @@ export function compactCount (value) {
 export function snapshotLine (progress, elapsedMs) {
   const seconds = Number.isFinite(elapsedMs) && elapsedMs > 0 ? `${(elapsedMs / 1000).toFixed(1)}s` : ''
   if (progress?.done === true) {
-    const parts = ['载入完成', `${compactCount(progress.loaded)} 条`]
+    const parts = [t('loading.done'), t('loading.items', { count: compactCount(progress.loaded) })]
     if (seconds !== '') parts.push(seconds)
     return parts.join(' · ')
   }
   const chunks = progress?.count > 1 ? `${Number(progress.index) + 1}/${String(progress.count)}` : ''
-  const loaded = Number(progress?.loaded) > 0 ? `${compactCount(progress.loaded)} 条` : ''
+  const loaded = Number(progress?.loaded) > 0 ? t('loading.items', { count: compactCount(progress.loaded) }) : ''
   const detail = [chunks, loaded].filter((part) => part !== '').join(' · ')
-  return detail === '' ? '正在载入历史…' : `正在载入历史 · ${detail}`
+  return detail === '' ? t('loading.history') : t('loading.historyWith', { detail })
 }
 
 /**

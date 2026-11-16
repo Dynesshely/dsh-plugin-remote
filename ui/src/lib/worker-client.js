@@ -1,3 +1,5 @@
+import { lang, t } from './i18n.js'
+
 /**
  * SSE 帧解析的主线程包装器。
  *
@@ -39,27 +41,35 @@ function parseOnMainThread (chunks) {
   const frames = []
   const errors = []
   if (!Array.isArray(chunks)) {
-    errors.push('帧批次格式不正确：chunks 不是数组，已跳过')
+    errors.push(t('worker.badBatch'))
     return { frames, errors }
   }
   for (let index = 0; index < chunks.length; index += 1) {
     const position = String(index + 1)
     const chunk = chunks[index]
     if (typeof chunk !== 'string') {
-      errors.push(`第 ${position} 条帧不是字符串，已跳过`)
+      errors.push(t('worker.frameNotString', { index: position }))
       continue
     }
     const text = extractJsonText(chunk)
     // 没有正文的事件（心跳、纯注释行）不是错误，直接跳过。
     if (text === '') continue
     if (text.length > MAX_FRAME_CHARS) {
-      errors.push(`第 ${position} 条帧过大（${String(text.length)} 字符，超过 ${String(MAX_FRAME_CHARS)} 字符上限），已跳过解析`)
+      errors.push(t('worker.frameTooLarge', {
+        index: position,
+        chars: String(text.length),
+        limit: String(MAX_FRAME_CHARS),
+      }))
       continue
     }
     try {
       frames.push(JSON.parse(text))
     } catch (error) {
-      errors.push(`第 ${position} 条帧解析失败（${String(text.length)} 字符）：${String(error?.message ?? error)}`)
+      errors.push(t('worker.frameParseFailed', {
+        index: position,
+        chars: String(text.length),
+        reason: String(error?.message ?? error),
+      }))
     }
   }
   return { frames, errors }
@@ -183,7 +193,7 @@ export function createStreamParser () {
       nextId += 1
       pending.set(id, job)
       try {
-        live.postMessage({ id, chunks: job.chunks })
+        live.postMessage({ id, chunks: job.chunks, lang: lang.value })
       } catch {
         // 投递失败（Worker 刚失效等）：就地补算，不能让这个 promise 落空。
         pending.delete(id)
@@ -448,7 +458,7 @@ function parseJsonOnMainThread (text, project) {
 
 /** @returns 一个「已取消」结果，用于 dispose 之后的每一次结清。 */
 function cancelledResult () {
-  return { value: undefined, error: '已取消' }
+  return { value: undefined, error: t('error.cancelled') }
 }
 
 /**
@@ -642,7 +652,7 @@ function createJsonParserInstance () {
   async function parse (text, options = {}) {
     // 已释放 / 已取消：立即给出结果，绝不留下一个永远不落定的 promise。
     if (disposed) return cancelledResult()
-    if (typeof text !== 'string') return { value: undefined, error: '待解析的响应正文不是字符串' }
+    if (typeof text !== 'string') return { value: undefined, error: t('worker.textNotString') }
     const project = options?.project
     const chunkChars = Number(options?.chunkChars) > 0 ? Number(options.chunkChars) : 0
     return new Promise((resolve) => {

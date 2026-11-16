@@ -1,3 +1,11 @@
+import { install, lang, t } from './i18n.js'
+import { enUS, zhCN } from './locales.misc.js'
+
+// Worker 看不到主线程那份字典注册表，所以自己装一份本文件用到的切片；语言由每条消息带过来
+// （主线程把 `lang.value` 一起投递），这样 Worker 报的错与页面当前语言一致。
+install('zh-CN', zhCN)
+install('en-US', enUS)
+
 /**
  * SSE 帧解析 Worker。
  *
@@ -67,27 +75,35 @@ function parseChunks (chunks) {
   const frames = []
   const errors = []
   if (!Array.isArray(chunks)) {
-    errors.push('帧批次格式不正确：chunks 不是数组，已跳过')
+    errors.push(t('worker.badBatch'))
     return { frames, errors }
   }
   for (let index = 0; index < chunks.length; index += 1) {
     const position = String(index + 1)
     const chunk = chunks[index]
     if (typeof chunk !== 'string') {
-      errors.push(`第 ${position} 条帧不是字符串，已跳过`)
+      errors.push(t('worker.frameNotString', { index: position }))
       continue
     }
     const text = extractJsonText(chunk)
     // 没有正文的事件（心跳、纯注释行）不是错误，直接跳过。
     if (text === '') continue
     if (text.length > MAX_FRAME_CHARS) {
-      errors.push(`第 ${position} 条帧过大（${String(text.length)} 字符，超过 ${String(MAX_FRAME_CHARS)} 字符上限），已跳过解析`)
+      errors.push(t('worker.frameTooLarge', {
+        index: position,
+        chars: String(text.length),
+        limit: String(MAX_FRAME_CHARS),
+      }))
       continue
     }
     try {
       frames.push(JSON.parse(text))
     } catch (error) {
-      errors.push(`第 ${position} 条帧解析失败（${String(text.length)} 字符）：${String(error?.message ?? error)}`)
+      errors.push(t('worker.frameParseFailed', {
+        index: position,
+        chars: String(text.length),
+        reason: String(error?.message ?? error),
+      }))
     }
   }
   return { frames, errors }
@@ -96,12 +112,14 @@ function parseChunks (chunks) {
 self.addEventListener('message', (event) => {
   const request = event.data
   const id = request?.id
+  // 主线程随每条消息带上当前语言；只认两种合法值，别的保持原样。
+  if (request?.lang === 'zh-CN' || request?.lang === 'en-US') lang.value = request.lang
   let result
   try {
     result = parseChunks(request?.chunks)
   } catch (error) {
     // 走到这里说明解析函数内部出了意外；仍然要回一条结果，否则主线程那个 promise 会一直挂着。
-    result = { frames: [], errors: [`帧批次处理失败：${String(error?.message ?? error)}`] }
+    result = { frames: [], errors: [t('worker.batchFailed', { reason: String(error?.message ?? error) })] }
   }
   self.postMessage({ id, frames: result.frames, errors: result.errors })
 })

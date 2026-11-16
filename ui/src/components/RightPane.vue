@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { t } from '../lib/i18n.js'
 import AppIcon from './AppIcon.vue'
 import FilePane from './FilePane.vue'
 import GitPane from './GitPane.vue'
@@ -19,21 +20,21 @@ const emit = defineEmits(['close'])
 const CONTAINERS = [
   {
     id: 'files',
-    name: '文件资源管理器',
+    name: t('container.files'),
     icon: 'folder',
-    detail: '浏览工作区、管理文件、预览常见格式',
+    detail: t('container.filesDetail'),
   },
   {
     id: 'preview',
-    name: '文件预览',
+    name: t('container.preview'),
     icon: 'file',
-    detail: '预览图片、PDF、音视频、Markdown 与代码',
+    detail: t('container.previewDetail'),
   },
   {
     id: 'git',
-    name: 'Git 状态',
+    name: t('container.git'),
     icon: 'fork',
-    detail: '查看工作区的分支、变更与差异',
+    detail: t('container.gitDetail'),
   },
 ]
 
@@ -44,7 +45,7 @@ let nextKey = 1
 function blankTab () {
   const key = `blank-${String(nextKey)}`
   nextKey += 1
-  return { key, containerId: undefined, label: '新标签页' }
+  return { key, containerId: undefined, label: t('container.newTab') }
 }
 
 /** Open tabs, in the order they were opened. Always at least one. */
@@ -88,7 +89,7 @@ function fill (tab, containerId) {
  */
 function resetTab (key) {
   tabs.value = tabs.value.map((candidate) => (candidate.key === key
-    ? { ...candidate, containerId: undefined, label: '新标签页' }
+    ? { ...candidate, containerId: undefined, label: t('container.newTab') }
     : candidate))
 }
 
@@ -145,7 +146,7 @@ function closeTab (key) {
               type="button"
               class="mr-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors"
               :class="active === tab.key ? 'hover:bg-white/25' : 'hover:bg-fill-chip'"
-              :title="`关闭 ${tab.label}`"
+              :title="t('rightpane.closeTab', { label: tab.label })"
               @click.stop="closeTab(tab.key)"
             >
               <AppIcon name="close" :size="9" />
@@ -156,16 +157,16 @@ function closeTab (key) {
       <button
         class="icon-btn h-7 w-7 shrink-0"
         type="button"
-        title="换一个工具"
+        :title="t('container.switch')"
         :disabled="activeTab === undefined || activeTab.containerId === undefined"
         @click="activeTab !== undefined && resetTab(activeTab.key)"
       >
         <AppIcon name="refresh" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="新建标签页" @click="addTab">
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('container.newTab')" @click="addTab">
         <AppIcon name="plus" :size="13" />
       </button>
-      <button class="icon-btn h-7 w-7 shrink-0" type="button" title="关闭侧栏" @click="emit('close')">
+      <button class="icon-btn h-7 w-7 shrink-0" type="button" :title="t('rightpane.close')" @click="emit('close')">
         <AppIcon name="close" :size="13" />
       </button>
     </header>
@@ -175,7 +176,7 @@ function closeTab (key) {
       v-if="activeTab !== undefined && activeTab.containerId === undefined"
       class="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-3 pb-2"
     >
-      <p class="px-1 pb-2 text-center text-[11px] text-tertiary">选择要在此标签页中打开的工具</p>
+      <p class="px-1 pb-2 text-center text-[11px] text-tertiary">{{ t('container.pick') }}</p>
       <!-- A card stops at a readable width instead of spanning a wide column edge to edge. -->
       <div class="w-full max-w-[19rem] space-y-1.5">
         <button
