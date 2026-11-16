@@ -201,7 +201,7 @@ onMounted(async () => {
     </header>
 
     <div class="flex shrink-0 items-center gap-2 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
-      <div class="min-w-0 max-w-[9rem] shrink">
+      <div class="min-w-[7rem] max-w-[9rem] shrink">
         <ComboBox
           :model-value="workspaceId"
           :items="workspaces"
@@ -212,7 +212,7 @@ onMounted(async () => {
         />
       </div>
       <!-- Which repository: a workspace can hold several, and the status is meaningless until one is chosen. -->
-      <div v-if="repoChoices.length > 0" class="min-w-0 max-w-[9rem] shrink">
+      <div v-if="repoChoices.length > 0" class="min-w-[7rem] max-w-[9rem] shrink">
         <ComboBox
           :model-value="repo"
           :items="repoChoices"

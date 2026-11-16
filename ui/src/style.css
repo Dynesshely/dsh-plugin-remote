@@ -2043,8 +2043,13 @@ body {
   transition: background-color 120ms ease;
 }
 
+/* Mixed from the foreground, not borrowed from a surface token.
+ *
+ * `--fill-chip` equals `--surface-2` under MD3 — which is the menu's own background — so hovering changed a colour
+ * into the same colour, and in the dark skin 6% white over a near-black panel was equally invisible. A wash of the
+ * text colour is one visible step away from the surface by construction, in every skin and both polarities. */
 .file-menu-item:hover {
-  background: var(--fill-chip);
+  background: color-mix(in srgb, var(--on-surface) 12%, transparent);
 }
 
 .file-menu-danger {
@@ -2052,7 +2057,7 @@ body {
 }
 
 .file-menu-danger:hover {
-  background: var(--danger-soft);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .file-menu-separator {
@@ -2075,4 +2080,23 @@ body {
 
 .status-float:hover {
   background: none;
+}
+
+/* A menu entry that cannot run right now.
+
+   It keeps its hover feedback on purpose. A native `disabled` button never matches `:hover`, which left every
+   unavailable entry looking like plain text — the pointer gave no sign it was over a menu row at all. The entry is
+   visibly dimmed, still highlights on hover, and the click handler is what refuses to act. */
+.file-menu-item-off {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.file-menu-item-off:hover {
+  background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+}
+
+/* Only the destructive entry keeps a colour wash when it is unavailable, so it does not read as an active danger. */
+.file-menu-danger.file-menu-item-off:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }

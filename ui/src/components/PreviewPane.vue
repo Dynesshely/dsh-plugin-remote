@@ -213,7 +213,7 @@ onMounted(async () => {
     </header>
 
     <div class="flex shrink-0 items-center gap-2 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
-      <div class="min-w-0 max-w-[11rem] shrink">
+      <div class="min-w-[7.5rem] max-w-[11rem] shrink">
         <ComboBox
           :model-value="workspaceId"
           :items="workspaces"

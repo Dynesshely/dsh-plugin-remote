@@ -331,7 +331,12 @@ function chooseFromBrowser (modelId) {
       Telemetry sits above the composer and centred on it, with no card of its own: these are read-only numbers,
       and a bordered strip made them look like another control competing with the input below.
     -->
-    <div v-if="!compact && state.selected !== undefined" class="mb-1 flex justify-center">
+    <!--
+      Always shown while a Session is open. It used to disappear in compact mode, which meant the numbers the reader
+      wanted were the first thing to go when the column narrowed. Narrowing now truncates each value instead: the
+      row keeps its place and its icons, and whatever does not fit ends in an ellipsis.
+    -->
+    <div v-if="state.selected !== undefined" class="mb-1 flex min-w-0 justify-center">
       <StatusStrip ref="stripRef" class="max-w-full" />
     </div>
 

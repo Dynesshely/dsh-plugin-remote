@@ -45,7 +45,7 @@ const ringTone = computed(() => {
     carries read-only numbers, so a background or border would make it look like another control. Only the icons
     and their text remain, which is all a reader needs from a measurement row.
   -->
-  <div class="status-chip status-float no-scrollbar flex h-6 items-center gap-x-3 overflow-x-auto px-1 text-[11px] whitespace-nowrap text-secondary">
+  <div class="status-chip status-float flex h-6 min-w-0 items-center gap-x-3 overflow-hidden px-1 text-[11px] whitespace-nowrap text-secondary">
 
     <span
       v-if="occupancy !== undefined"
