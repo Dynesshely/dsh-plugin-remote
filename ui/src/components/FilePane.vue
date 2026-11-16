@@ -667,6 +667,8 @@ function startMarquee (event) {
       right: rowRect.right - rect.left,
     })
   }
+  bandOrigin = { x: event.clientX, y: event.clientY }
+  bandMoved = false
   marquee.value = {
     x0: event.clientX - rect.left,
     y0: event.clientY - rect.top + box.scrollTop,
@@ -678,6 +680,13 @@ function startMarquee (event) {
   event.currentTarget.setPointerCapture?.(event.pointerId)
   event.preventDefault()
 }
+
+/** True while a click caused by releasing a rubber band is still in flight. */
+let swallowNextClick = false
+/** True once the pointer moved far enough during a drag to count as one. */
+let bandMoved = false
+/** Where the current drag started, in client coordinates. */
+let bandOrigin = { x: 0, y: 0 }
 
 /** The whole action row, measured to decide whether its buttons still fit. */
 const actionsBox = ref(null)
@@ -794,6 +803,11 @@ function runAction (run) {
 
 /** Clicking the list's blank space clears the selection, unless the click was part of a drag. */
 function clearOnBlankClick (event) {
+  // The click that ends a rubber band is not a request to clear anything.
+  if (swallowNextClick) {
+    swallowNextClick = false
+    return
+  }
   if (event.target instanceof Element && event.target.closest('[data-entry]') !== null) return
   if (selection.size === 0) return
   selection.value = new Set()
@@ -804,6 +818,7 @@ function moveMarquee (event) {
   const band = marquee.value
   const box = listBox.value
   if (band === undefined || box === null) return
+  if (Math.abs(event.clientX - bandOrigin.x) > 3 || Math.abs(event.clientY - bandOrigin.y) > 3) bandMoved = true
   const rect = box.getBoundingClientRect()
   band.x1 = event.clientX - rect.left
   band.y1 = event.clientY - rect.top + box.scrollTop
@@ -842,6 +857,14 @@ function endMarquee () {
   }
   applyBand()
   marquee.value = undefined
+  // The browser sends a `click` right after the release. It carries the blank area the drag started from, so
+  // without this the handler below would clear the selection the band just made.
+  if (bandMoved && !swallowNextClick) {
+    swallowNextClick = true
+    // Safety net: if no click arrives (a cancelled gesture), do not eat the reader's next real one.
+    window.setTimeout(() => { swallowNextClick = false }, 0)
+  }
+  bandMoved = false
 }
 
 /** @returns the band's style, for the overlay. */

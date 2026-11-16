@@ -270,7 +270,15 @@ function measure () {
   if (nodes.length > 0) {
     const natural = nodes.reduce((total, node) => total + Math.max(node.offsetWidth, node.scrollWidth), 0)
     // gap-1.5 between controls plus the row's own horizontal padding.
-    neededWidth.value = Math.max(neededWidth.value, natural + 6 * (nodes.length - 1) + 16)
+    const needed = natural + 6 * (nodes.length - 1) + 16
+    // Only the expanded layout measures the real requirement.
+    //
+    // Collapsed controls are narrower, so measuring them says "this fits", which re-expands the row, which no
+    // longer fits, which collapses it — a loop. Keeping the largest value ever seen broke that loop but had the
+    // opposite fault: one bad reading (an early mount, or a measurement taken while the sidebar was opening) was
+    // remembered forever, so a wide window stayed stuck in the icon-only layout. Reading only while expanded gets
+    // both: the number is honest, and it is recomputed every time the row is open.
+    if (!reportedOverflow) neededWidth.value = needed
   }
   if (neededWidth.value === 0) return
   const available = row.clientWidth
