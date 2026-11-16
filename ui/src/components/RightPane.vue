@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
 import FilePane from './FilePane.vue'
+import GitPane from './GitPane.vue'
+import PreviewPane from './PreviewPane.vue'
 
 /**
  * The right sidebar, as a host for several containers.
@@ -20,6 +22,18 @@ const CONTAINERS = [
     name: '文件资源管理器',
     icon: 'folder',
     detail: '浏览工作区、管理文件、预览常见格式',
+  },
+  {
+    id: 'preview',
+    name: '文件预览',
+    icon: 'file',
+    detail: '预览图片、PDF、音视频、Markdown 与代码',
+  },
+  {
+    id: 'git',
+    name: 'Git 状态',
+    icon: 'fork',
+    detail: '查看工作区的分支、变更与差异',
   },
 ]
 
@@ -189,6 +203,8 @@ function closeTab (key) {
       <div class="min-h-0 flex-1">
         <KeepAlive>
           <FilePane v-if="activeTab?.containerId === 'files'" :key="activeTab.key" />
+          <PreviewPane v-else-if="activeTab?.containerId === 'preview'" :key="activeTab.key" />
+          <GitPane v-else-if="activeTab?.containerId === 'git'" :key="activeTab.key" />
         </KeepAlive>
       </div>
     </div>

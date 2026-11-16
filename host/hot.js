@@ -51,6 +51,42 @@ async function usageRoutes (api) {
 }
 
 /**
+ * The Git module, re-imported whenever its file changes.
+ *
+ * It was a static import at first, and Node caches modules by URL — so a fix in git.js only took effect after a
+ * full DSH restart, which defeats the point of routing these requests through this file at all.
+ */
+let gitModule = { module: undefined, mtimeMs: 0 }
+
+/** @returns the freshly imported git module. */
+async function loadGit () {
+  const url = new URL('./git.js', import.meta.url)
+  const info = statSync(fileURLToPath(url))
+  if (gitModule.module === undefined || gitModule.mtimeMs !== info.mtimeMs) {
+    const fresh = new URL(url.href)
+    fresh.searchParams.set('v', String(info.mtimeMs))
+    gitModule = { module: await import(fresh.href), mtimeMs: info.mtimeMs }
+  }
+  return gitModule.module
+}
+
+/**
+ * @param api - the shell context.
+ * @returns whether the git module handled the request.
+ */
+async function gitRoutes (api) {
+  try {
+    const module = await loadGit()
+    if (await module.handleGitRepos(api)) return true
+    if (await module.handleGit(api)) return true
+    return await module.handleGitDiff(api)
+  } catch (error) {
+    api.json(500, { error: `git module failed: ${String(error?.message ?? error)}` })
+    return true
+  }
+}
+
+/**
  * The file browser, re-imported whenever that module changes — the same trick the usage module uses, so
  * editing the browser does not need a DSH restart either.
  */
@@ -1019,6 +1055,8 @@ export async function handle (api) {
   if (await usageRoutes(api)) return true
   // Model capacity metadata, joined from the gateway catalogue.
   if (await handleModelMeta(api)) return true
+  // Git state of the workspace, read from the real git binary.
+  if (await gitRoutes(api)) return true
   // Read-only file browser over the workspace.
   if (await fileRoutes(api)) return true
   const method = api.request.method
