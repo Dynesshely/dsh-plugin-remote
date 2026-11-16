@@ -320,6 +320,10 @@
   --color-muted: var(--text-muted);
   --color-emphasis: var(--text-emphasis);
   --color-strong: var(--text-strong);
+  --color-status-running: var(--status-running);
+  --color-status-done: var(--status-done);
+  --color-status-attention: var(--status-attention);
+  --color-status-failed: var(--status-failed);
   --color-danger-on: var(--danger-on);
   --color-warning-on: var(--warning-on);
   --color-success-on: var(--success-on);
@@ -1770,18 +1774,7 @@ body {
 /* The status chips are controls that sit on top of the composer, so they lift off it: a brighter fill in
    glass, a container colour plus a hairline of elevation in MD3. No transform on hover — a chip that shifts
    under the pointer reads as a layout bug. */
-[data-skin='glass'] .status-chip {
-  background: var(--surface-2);
-  border: 1px solid var(--outline);
-  box-shadow: var(--shadow-2);
-}
 
-[data-skin='md3'] .status-chip {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
-  border: 0;
-  box-shadow: var(--shadow-2);
-}
 
 /* Tool rows use the quiet elevation.
 
@@ -1984,4 +1977,102 @@ body {
 /* The crumbs inside must not draw their own box: the frame is the box. */
 .file-path-frame .file-crumb {
   cursor: pointer;
+}
+
+/* Run-state colours.
+
+   One vocabulary for the whole app, so a colour means the same thing wherever it appears:
+
+     blue   a turn is running
+     green  the turn finished
+     yellow something is waiting for the reader (a question, an approval, a dropped stream)
+     red    the turn ended unexpectedly
+
+   These name the meaning rather than the palette, so the two skins can disagree about the exact hue while the
+   mapping stays the same. Kept as tokens so every status dot reads from one place instead of picking a
+   Tailwind colour that happens to look right. */
+:root,
+[data-skin='glass'],
+[data-skin='md3'] {
+  --status-running: var(--primary);
+  --status-done: var(--success);
+  --status-attention: var(--warning);
+  --status-failed: var(--danger);
+}
+
+/* Rubber-band selection, drawn the way Windows Explorer draws it: a translucent wash of the selection colour
+   with a crisp one-pixel edge, no rounding and no shadow. The band is only a picture of the drag — the rows it
+   covers are what actually gets selected — so it must never take pointer events itself. */
+.file-marquee {
+  border: 1px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  border-radius: 1px;
+  box-shadow: none;
+}
+
+/* The gutter that makes a drag possible is also a hint: the pointer turns into a crosshair there, which is what
+   tells a reader that this empty space is draggable. */
+.file-drag-surface {
+  cursor: crosshair;
+}
+
+/* Row menu.
+
+   A floating menu over a list of files: opaque surface, one hairline, one soft shadow. It has to be opaque — a
+   translucent menu over a list of filenames is unreadable — and it must not use a backdrop filter, since the
+   panel underneath may be streaming. */
+.file-menu {
+  min-width: 11rem;
+  padding: 0.25rem;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-rc-md);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-2);
+}
+
+.file-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-rc-sm);
+  color: var(--text-strong);
+  font-size: 12px;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.file-menu-item:hover {
+  background: var(--fill-chip);
+}
+
+.file-menu-danger {
+  color: var(--danger);
+}
+
+.file-menu-danger:hover {
+  background: var(--danger-soft);
+}
+
+.file-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0.375rem;
+  background: var(--outline-variant);
+}
+
+/* Measured values, not a control.
+
+   The strip reads out tokens, cost and rate; it is decoration around numbers and must not look clickable. No
+   background, no border, no shadow — just the icons and text, inline above the composer. */
+.status-float {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--text-tertiary);
+}
+
+.status-float:hover {
+  background: none;
 }

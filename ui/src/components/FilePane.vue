@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../lib/api.js'
 import { codeHtml } from '../lib/highlight.js'
 import { renderMarkdown } from '../lib/markdown.js'
@@ -246,6 +246,62 @@ function formatSize (bytes) {
   if (value >= 1024) return `${Math.round(value / 1024)} KB`
   return `${value} B`
 }
+
+/** The open row menu: where it is and which entry it belongs to. */
+const menu = ref(undefined)
+
+/**
+ * Open the row menu.
+ * @param event - the contextmenu event, positioned at the pointer.
+ * @param entry - the row that was right-clicked.
+ *
+ * Right-clicking selects the row first, because every action in the menu reads the selection; without that the
+ * menu would act on whatever happened to be selected before.
+ */
+function openMenu (event, entry) {
+  selectOnly(entry)
+  // Keep the menu inside the viewport: a row near the bottom would otherwise open a menu that runs off screen.
+  const width = 176
+  const height = entry.kind === 'dir' ? 108 : 176
+  menu.value = {
+    entry,
+    left: Math.min(event.clientX, window.innerWidth - width - 8),
+    top: Math.min(event.clientY, window.innerHeight - height - 8),
+  }
+}
+
+/** Close the row menu. */
+function closeMenu () {
+  menu.value = undefined
+}
+
+/** Escape dismisses the menu, the same way it dismisses the other overlays in this panel. */
+function onMenuKeydown (event) {
+  if (event.key === 'Escape' && menu.value !== undefined) {
+    event.preventDefault()
+    closeMenu()
+  }
+}
+
+/** Save one file to disk through the same raw route the preview uses. */
+function downloadEntry (entry) {
+  const link = document.createElement('a')
+  link.href = rawUrl(entryPath(entry))
+  link.download = entry.name
+  link.click()
+}
+
+/** Run a menu action and close the menu, whatever the action does. */
+function runMenu (action) {
+  const entry = menu.value?.entry
+  menu.value = undefined
+  if (entry === undefined) return
+  void action(entry)
+}
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onMenuKeydown)
+})
 
 /** @returns whether a row is selected. */
 function isSelected (entry) {
@@ -590,6 +646,8 @@ let bandKey = ''
 function startMarquee (event) {
   const box = listBox.value
   if (box === null) return
+  // A pointer that landed on a row is a click or a drag of that row, never a rubber band.
+  if (event.target instanceof Element && event.target.closest('[data-entry]') !== null) return
   const rect = box.getBoundingClientRect()
   const rows = []
   for (const row of box.querySelectorAll('[data-entry]')) {
@@ -614,6 +672,13 @@ function startMarquee (event) {
   bandKey = ''
   event.currentTarget.setPointerCapture?.(event.pointerId)
   event.preventDefault()
+}
+
+/** Clicking the list's blank space clears the selection, unless the click was part of a drag. */
+function clearOnBlankClick (event) {
+  if (event.target instanceof Element && event.target.closest('[data-entry]') !== null) return
+  if (selection.size === 0) return
+  selection.value = new Set()
 }
 
 /** Grow the band: the overlay follows the pointer, the hit test is batched into one frame. */
@@ -756,6 +821,8 @@ async function jumpToSession () {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onMenuKeydown)
+
   workspaceId.value = sessionWorkspace.value
   void open('')
 })
@@ -787,8 +854,13 @@ watch(() => state.selected, () => {
       Workspace selector and the eight actions share one row: three that create content, a divider, then
       five that act on the selection. The selector yields width first, so the buttons never shrink or wrap.
     -->
-    <div class="flex shrink-0 items-center gap-1.5 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
-      <div class="min-w-0 flex-1">
+    <div class="flex shrink-0 items-center gap-2 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
+      <!--
+        The picker is only as wide as its own label: a workspace name is short, and stretching it across the row
+        left a large dead field that looked interactive but was not. The space that frees up sits between the
+        picker and the action buttons.
+      -->
+      <div class="min-w-0 max-w-[11rem] shrink">
         <ComboBox
           :model-value="workspaceId"
           :items="workspaces"
@@ -798,6 +870,7 @@ watch(() => state.selected, () => {
           @update:model-value="switchWorkspace"
         />
       </div>
+      <div class="min-w-2 flex-1" />
       <!-- Icon-only: the panel is narrow, and labelled chips would push the selector off the row. -->
       <button class="icon-btn h-7 w-7" type="button" title="新建文件夹" aria-label="新建文件夹" :disabled="busy !== ''" @click="create('dir')">
         <AppIcon name="folder" :size="13" />
@@ -996,8 +1069,22 @@ watch(() => state.selected, () => {
         <p v-if="hasSelection" class="shrink-0 px-1.5 pt-1 pb-0.5 text-[10px] text-tertiary">
           已选中 {{ selection.size }} 项
         </p>
-        <div ref="listBox" class="relative">
-          <ul class="space-y-0.5">
+        <!--
+          The whole box is the drag surface: a rubber band may start in the gutter to the left of the rows or in
+          the empty space below them. Pointer events bubble up from the rows, and `startMarquee` ignores any
+          pointer that landed on a row, so a click still selects and a drag in empty space still bands.
+        -->
+        <div
+          ref="listBox"
+          class="file-drag-surface relative touch-none"
+          @pointerdown="startMarquee"
+          @pointermove="moveMarquee"
+          @pointerup="endMarquee"
+          @pointercancel="endMarquee"
+          @click="clearOnBlankClick"
+        >
+          <!-- The left inset is what gives the pointer somewhere to land that is not a row. -->
+          <ul class="space-y-0.5 pl-3">
             <li v-for="entry in visibleEntries" :key="entry.name" class="file-row">
             <button
               type="button"
@@ -1006,6 +1093,7 @@ watch(() => state.selected, () => {
               :class="isSelected(entry) ? 'is-selected' : ''"
               @click="tapRow(entry)"
               @dblclick="activate(entry)"
+              @contextmenu.prevent.stop="openMenu($event, entry)"
             >
               <AppIcon
                 :name="entry.kind === 'dir' ? 'folder' : 'file'"
@@ -1019,25 +1107,60 @@ watch(() => state.selected, () => {
             </li>
           </ul>
 
-          <!-- Blank space under the list: somewhere to start a rubber band without hitting a row. -->
-          <div
-            class="mt-1 h-24 cursor-crosshair touch-none rounded-lg"
-            title="拖动框选"
-            @pointerdown="startMarquee"
-            @pointermove="moveMarquee"
-            @pointerup="endMarquee"
-            @pointercancel="endMarquee"
-          />
+          <!-- Empty space below the last row, so there is always somewhere to start a band on a full page. -->
+          <div class="mt-1 h-24" />
 
           <div
             v-if="marqueeStyle !== undefined"
-            class="pointer-events-none absolute rounded border border-primary bg-primary-container"
+            class="file-marquee pointer-events-none absolute"
             :style="marqueeStyle"
           />
         </div>
         <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on">
           条目过多，仅显示前面一部分。
         </p>
+
+        <!--
+          Row menu. Teleported to the body because the list scrolls and clips: a menu inside it would be cut off
+          at the panel edge. It is positioned from the pointer, clamped in `openMenu`, and dismissed by a click
+          anywhere else, Escape, or the action itself.
+        -->
+        <Teleport to="body">
+          <div v-if="menu !== undefined" class="fixed inset-0 z-[160]" @pointerdown="closeMenu" @contextmenu.prevent="closeMenu">
+            <div
+              class="file-menu absolute"
+              :style="{ left: `${String(menu.left)}px`, top: `${String(menu.top)}px` }"
+              @pointerdown.stop
+            >
+              <button type="button" class="file-menu-item" @click="runMenu((entry) => activate(entry))">
+                <AppIcon :name="menu.entry.kind === 'dir' ? 'folder' : 'file'" :size="12" />
+                <span>{{ menu.entry.kind === 'dir' ? '打开文件夹' : '预览' }}</span>
+              </button>
+              <button v-if="menu.entry.kind === 'file'" type="button" class="file-menu-item" @click="runMenu((entry) => downloadEntry(entry))">
+                <AppIcon name="download" :size="12" />
+                <span>下载</span>
+              </button>
+              <div class="file-menu-separator" />
+              <button type="button" class="file-menu-item" @click="runMenu(() => renameSelected())">
+                <AppIcon name="pencil" :size="12" />
+                <span>重命名</span>
+              </button>
+              <button type="button" class="file-menu-item" @click="runMenu(() => clipSelected('copy'))">
+                <AppIcon name="copy" :size="12" />
+                <span>复制</span>
+              </button>
+              <button type="button" class="file-menu-item" @click="runMenu(() => clipSelected('move'))">
+                <AppIcon name="cut" :size="12" />
+                <span>剪切</span>
+              </button>
+              <div class="file-menu-separator" />
+              <button type="button" class="file-menu-item file-menu-danger" @click="runMenu(() => deleteSelected())">
+                <AppIcon name="trash" :size="12" />
+                <span>删除</span>
+              </button>
+            </div>
+          </div>
+        </Teleport>
       </template>
     </div>
 

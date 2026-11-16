@@ -73,7 +73,7 @@ const resultImages = computed(() => (props.item.result === undefined ? [] : imag
       <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-tertiary">{{ argsPreview }}</span>
       <span
         class="h-1.5 w-1.5 shrink-0 rounded-full"
-        :class="failed ? 'bg-danger' : pending ? 'bg-warning pulse' : 'bg-success'"
+        :class="failed ? 'bg-status-failed' : pending ? 'bg-status-running pulse' : 'bg-status-done'"
       />
     </button>
     <div v-if="expanded" class="border-t border-outline-medium px-3 py-2 dark:border-white/10">

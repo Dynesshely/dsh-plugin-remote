@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { loadModels, loadOlder, loadPermissions, loadState, selectedSession, state, transcriptItems } from '../lib/store.js'
+import { loadModels, loadOlder, loadPermissions, loadState, selectSession, selectedSession, state, transcriptItems } from '../lib/store.js'
 import { mobile } from '../lib/layout.js'
 import { activeTick, promptTicks } from '../lib/rail.js'
 import { renderMarkdown } from '../lib/markdown.js'
@@ -228,10 +228,37 @@ const activePrompt = ref(-1)
 
 /** Theme choices for the self-drawn combobox in the top bar. */
 const THEMES = [
-  { value: 'system', name: '跟随系统', icon: 'monitor' },
+  { value: 'system', name: '跟随系统', icon: 'autoTheme' },
   { value: 'light', name: '浅色', icon: 'sun' },
   { value: 'dark', name: '深色', icon: 'moon' },
 ]
+
+/**
+ * Reload the Session on screen.
+ *
+ * `loadState` only refreshes the sidebar list and the telemetry, so a reader who pressed it while looking at a
+ * transcript saw nothing happen. `selectSession` is the full reload — it drops the frame backlog, reopens the
+ * event stream and re-reads permissions — so re-selecting the same id is what the button means.
+ */
+async function reloadCurrent () {
+  if (state.selected === undefined) {
+    await loadState()
+    return
+  }
+  await selectSession(state.selected)
+}
+
+/** @returns the colour, dot class and label for the Session's current run state. */
+const runTone = computed(() => {
+  if (state.sessionFailed || state.streamError !== '') {
+    return { text: 'text-danger', dot: 'bg-status-failed', label: state.streamError || '加载失败' }
+  }
+  if (state.telemetry.running) return { text: 'text-primary', dot: 'bg-status-running pulse', label: '正在运行' }
+  if (state.telemetry.awaiting === true || state.pending?.questions?.length > 0 || state.pending?.approvals?.length > 0) {
+    return { text: 'text-warning-on', dot: 'bg-status-attention pulse', label: '需要你的回应' }
+  }
+  return { text: 'text-tertiary', dot: 'bg-status-done', label: '已完成' }
+})
 
 /** 皮肤选择：与主题并排放在设置的「外观」区。 */
 const SKINS = [
@@ -705,15 +732,17 @@ onBeforeUnmount(() => {
       </button>
       <!-- Run state lives here: the dot was already in this header, so the status strip below the
            composer no longer repeats it — it only gains the word while a turn is actually running. -->
+      <!--
+        Run state uses the shared vocabulary: blue while a turn is running, green once it has finished, yellow
+        when the reader has to act, red when it ended badly. The dot was green for "running", which read as
+        "already done" — the opposite of what it meant.
+      -->
       <span
         class="flex shrink-0 items-center gap-1.5"
-        :class="state.telemetry.running ? 'text-success-on text-success-on' : ''"
-        :title="state.telemetry.running ? '正在运行' : '空闲'"
+        :class="runTone.text"
+        :title="runTone.label"
       >
-        <span
-          class="h-2 w-2 shrink-0 rounded-full"
-          :class="state.telemetry.running ? 'bg-success pulse' : 'bg-fill-strong bg-fill-strong'"
-        />
+        <span class="h-2 w-2 shrink-0 rounded-full" :class="runTone.dot" />
         <span v-if="state.telemetry.running" class="text-[11px] font-medium">运行中</span>
       </span>
       <h1 class="min-w-0 flex-1 truncate text-sm font-medium">
@@ -722,20 +751,27 @@ onBeforeUnmount(() => {
       <ComboBox
         :model-value="theme"
         :items="THEMES"
-        icon="monitor"
+        icon="autoTheme"
         align="right"
         :width="mobile ? 'w-12 justify-center gap-1 px-1.5' : 'max-w-[8.5rem]'"
         :label-class="mobile ? 'hidden' : ''"
         @update:model-value="emit('update:theme', $event)"
       />
-      <button class="icon-btn" type="button" title="右侧栏" @click="emit('toggleFiles')">
-        <AppIcon name="sidebar" :size="15" />
+      <button
+        class="icon-btn"
+        type="button"
+        title="重新加载当前会话"
+        aria-label="重新加载当前会话"
+        :disabled="state.selected === undefined || state.sessionLoading"
+        @click="reloadCurrent"
+      >
+        <AppIcon name="refresh" :size="15" :class="state.sessionLoading ? 'animate-spin' : ''" />
       </button>
       <button class="icon-btn" type="button" title="设置" @click="settingsOpen = true">
         <AppIcon name="gear" :size="15" />
       </button>
-      <button class="icon-btn" type="button" title="刷新会话列表" @click="loadState()">
-        <AppIcon name="refresh" :size="15" />
+      <button class="icon-btn" type="button" title="右侧栏" @click="emit('toggleFiles')">
+        <AppIcon name="sidebar" :size="15" />
       </button>
     </header>
 
@@ -891,15 +927,15 @@ onBeforeUnmount(() => {
         <div
           class="pointer-events-auto flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] shadow-lg backdrop-blur-xl"
           :class="state.snapshotProgress.done
-            ? 'border-success-on bg-success-soft text-success-on border-success-on bg-success-soft text-success-on'
-            : 'border-outline bg-white/85 text-muted dark:border-white/15 bg-fill-strong text-strong'"
+            ? 'border-success-on bg-success-soft text-success-on'
+            : 'border-outline bg-fill-strong text-strong'"
         >
           <AppIcon v-if="state.snapshotProgress.done" name="check" :size="13" class="shrink-0" />
           <AppIcon v-else name="refresh" :size="13" class="shrink-0 animate-spin" />
           <span class="truncate">{{ snapshotLabel }}</span>
           <span
             v-if="!state.snapshotProgress.done && state.snapshotProgress.count > 1"
-            class="relative h-1 w-16 shrink-0 overflow-hidden rounded-full bg-black/10 dark:bg-white/15"
+            class="relative h-1 w-16 shrink-0 overflow-hidden rounded-full bg-fill-chip"
           >
             <span
               class="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-300"

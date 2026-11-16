@@ -39,9 +39,12 @@ const ringTone = computed(() => {
 </script>
 
 <template>
-  <!-- One line, exact toolbar height, horizontally scrollable rather than wrapping. The run state
-       itself lives in the conversation header, so this row only carries measurements. -->
-  <div class="status-chip glass-soft no-scrollbar flex h-9 items-center gap-x-3 overflow-x-auto rounded-xl px-3 text-[11px] whitespace-nowrap text-secondary">
+  <!--
+    One line, horizontally scrollable rather than wrapping. No card: this strip sits above the composer and
+    carries read-only numbers, so a background or border would make it look like another control. Only the icons
+    and their text remain, which is all a reader needs from a measurement row.
+  -->
+  <div class="status-chip status-float no-scrollbar flex h-6 items-center gap-x-3 overflow-x-auto px-1 text-[11px] whitespace-nowrap text-secondary">
 
     <span
       v-if="occupancy !== undefined"

@@ -237,7 +237,7 @@ const groupState = computed(() => {
       <span v-if="groupState.failed > 0" class="shrink-0 text-[11px] text-danger">{{ groupState.failed }} 失败</span>
       <span
         class="h-1.5 w-1.5 shrink-0 rounded-full"
-        :class="groupState.failed > 0 ? 'bg-danger' : groupState.running ? 'bg-warning pulse' : 'bg-success'"
+        :class="groupState.failed > 0 ? 'bg-status-failed' : groupState.running ? 'bg-status-running pulse' : 'bg-status-done'"
       />
     </button>
     <div v-if="groupOpen" class="space-y-1.5 border-t border-outline-medium p-2 dark:border-white/10">

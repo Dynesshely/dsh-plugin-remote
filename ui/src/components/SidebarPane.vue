@@ -4,6 +4,7 @@ import {
   createSession,
   forkSession,
   groupedSessions,
+  isSessionUnread,
   workspaceTreeOf,
   isPinned,
   renameSession,
@@ -418,7 +419,7 @@ function entriesFor (session) {
       <span class="min-w-0 flex-1 truncate text-sm font-semibold tracking-wide">DSH REMOTE</span>
       <span
         class="h-2 w-2 shrink-0 rounded-full"
-        :class="state.streamError ? 'bg-warning pulse' : 'bg-success'"
+        :class="state.streamError ? 'bg-status-attention pulse' : 'bg-status-done'"
         :title="state.streamError || '已连接'"
       />
       <button class="icon-btn h-7 w-7" type="button" title="收起侧栏" @click="emit('close')">
@@ -502,11 +503,23 @@ function entriesFor (session) {
               : 'hover:bg-fill-chip'"
           >
             <button type="button" class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2 text-left text-[13px]" @click="open(session.id)">
-              <!-- The status dot always stays put; pinning only adds a marker on the right. -->
-              <span
-                class="h-1.5 w-1.5 shrink-0 rounded-full"
-                :class="session.running ? 'bg-success pulse' : session.origin === 'subagent' ? 'bg-primary' : 'bg-fill-strong bg-fill-strong'"
-              />
+              <!--
+                Run state, as one dot with three meanings: blue while a turn is running, green once it finished
+                while the reader was elsewhere, and nothing at all when the finished turn has already been read.
+                The slot keeps its width either way so titles stay on one vertical line.
+              -->
+              <span class="flex h-1.5 w-1.5 shrink-0 items-center justify-center">
+                <span
+                  v-if="session.running"
+                  class="h-1.5 w-1.5 rounded-full bg-status-running pulse"
+                  title="正在运行"
+                />
+                <span
+                  v-else-if="isSessionUnread(session.id)"
+                  class="h-1.5 w-1.5 rounded-full bg-status-done"
+                  title="已完成，尚未查看"
+                />
+              </span>
               <input
                 v-if="renamingId === session.id"
                 ref="renameInput"

@@ -12,6 +12,13 @@ import {
 export const state = reactive({
   /** Fingerprint of the Session list, so an unchanged catalog is not re-applied. */
   sessionFingerprint: '',
+  /**
+   * Sessions whose turn finished while the reader was looking somewhere else.
+   *
+   * The sidebar shows a dot for these and nothing at all once they have been opened: "finished and unread" is
+   * the only state worth drawing attention to, and a session that has been read needs no marker.
+   */
+  unreadDoneSessionIds: [],
   /** Set once the boot request has failed, so the page can offer a retry instead of a blank screen. */
   bootError: '',
   /** True once a Session switch has been waiting long enough to be worth admitting. */
@@ -754,6 +761,78 @@ export function blocksToText (message) {
 /**
  * @param signal - 可选的取消信号；切换会话时上一条会话的这些附属请求会被中止（D）。
  */
+// Restored before the first Session diff, so marks survive a reload.
+state.unreadDoneSessionIds = readUnread()
+
+/** localStorage key for the finished-but-unread set. */
+const UNREAD_KEY = 'rc.unreadDone'
+
+/** @returns the remembered finished-but-unread ids. */
+function readUnread () {
+  try {
+    const raw = window.localStorage.getItem(UNREAD_KEY)
+    const parsed = raw === null ? [] : JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** Persist the finished-but-unread set; a blocked storage just keeps the in-memory copy. */
+function saveUnread () {
+  try {
+    window.localStorage.setItem(UNREAD_KEY, JSON.stringify(state.unreadDoneSessionIds))
+  } catch {
+    /* in-memory only */
+  }
+}
+
+/**
+ * Mark a Session as finished-but-unread.
+ * @param sessionId - the Session that just stopped running.
+ */
+export function markSessionUnread (sessionId) {
+  if (sessionId === undefined || sessionId === state.selected) return
+  if (state.unreadDoneSessionIds.includes(sessionId)) return
+  state.unreadDoneSessionIds = [...state.unreadDoneSessionIds, sessionId]
+  saveUnread()
+}
+
+/**
+ * Clear the mark for one Session.
+ * @param sessionId - the Session the reader is now looking at.
+ */
+export function markSessionRead (sessionId) {
+  if (!state.unreadDoneSessionIds.includes(sessionId)) return
+  state.unreadDoneSessionIds = state.unreadDoneSessionIds.filter((id) => id !== sessionId)
+  saveUnread()
+}
+
+/** @returns whether a Session finished while the reader was elsewhere. */
+export function isSessionUnread (sessionId) {
+  return state.unreadDoneSessionIds.includes(sessionId)
+}
+
+/** The Sessions that were running at the previous check, so a finish can be detected as a transition. */
+let previouslyRunning = new Set()
+
+/**
+ * Diff the run state of every Session and mark the ones that just finished.
+ *
+ * Runs wherever the Session list is installed (a boot fetch or a status broadcast), because a turn can finish
+ * while this page is open on another Session and the broadcast is the only notification of it.
+ */
+function trackFinishedSessions () {
+  const runningNow = new Set(state.sessions.filter((session) => session.running === true).map((session) => session.id))
+  for (const id of previouslyRunning) {
+    if (runningNow.has(id)) continue
+    markSessionUnread(id)
+  }
+  previouslyRunning = runningNow
+  // Looking at a finished Session clears its mark, including one restored from a previous visit.
+  if (state.selected !== undefined) markSessionRead(state.selected)
+}
+
 export async function loadState (signal) {
   try {
     const payload = await api('/api/state', { signal })
@@ -766,6 +845,7 @@ export async function loadState (signal) {
     if (fingerprint !== state.sessionFingerprint) {
       state.sessionFingerprint = fingerprint
       state.sessions = sessions
+      trackFinishedSessions()
     }
     state.workspaces = payload.workspaces ?? []
     // 两处都「先比指纹再换对象」：`pending` 被每一行消息读（判断这行是不是待回答问题），换一次
@@ -984,6 +1064,8 @@ export async function retrySession () {
 /** Follow one Session: reset the transcript, then stream frames into the store. */
 export async function selectSession (sessionId) {
   state.selected = sessionId
+  // Opening a Session is the definition of having read it, so its finished-but-unread dot goes away here.
+  markSessionRead(sessionId)
   // One place records the choice, so every path into a Session — sidebar, restore, Host push — is kept.
   rememberSession(sessionId)
   // The transcript is empty from here until the snapshot lands, which is worth saying out loud: an empty
@@ -1062,6 +1144,7 @@ function streamHandlers () {
       state.sessionFingerprint = fingerprint
       const known = new Map(state.sessions.map((session) => [session.id, session]))
       state.sessions = sessions.map((session) => ({ ...session, workspaceId: known.get(session.id)?.workspaceId }))
+    trackFinishedSessions()
       refreshSoon()
     },
     onError: (message) => {

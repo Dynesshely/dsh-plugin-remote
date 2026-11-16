@@ -300,6 +300,14 @@ function chooseFromBrowser (modelId) {
   <div class="px-2 pt-2" style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px))">
     <div v-if="state.actionError" class="mb-1.5 px-1 text-[12px] text-danger">{{ state.actionError }}</div>
 
+    <!--
+      Telemetry sits above the composer and centred on it, with no card of its own: these are read-only numbers,
+      and a bordered strip made them look like another control competing with the input below.
+    -->
+    <div v-if="!compact && state.selected !== undefined" class="mb-1 flex justify-center">
+      <StatusStrip ref="stripRef" class="max-w-full" />
+    </div>
+
     <!-- Slightly tighter corners than the other panels (18px instead of 24px). -->
     <!-- No `overflow-hidden` here: the model/permission comboboxes open upwards out of the card.
          Paste is handled on the card so an image can be dropped anywhere in the composer. -->
@@ -340,13 +348,12 @@ function chooseFromBrowser (modelId) {
         @files="attachFiles"
       />
 
-      <!-- Left cluster: attachment intake and the telemetry strip. -->
+      <!-- Left cluster: attachment intake. -->
       <div ref="toolbar" class="flex items-center gap-1.5 px-2 pb-2">
         <button ref="attachRef" class="icon-btn shrink-0" type="button" title="添加图片" :disabled="state.selected === undefined" @click="fileInput.click()">
           <AppIcon name="paperclip" :size="16" />
         </button>
         <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="pick" />
-        <StatusStrip v-if="!compact && state.selected !== undefined" ref="stripRef" class="min-w-0 shrink" />
 
         <!-- Right cluster: the full controls while they fit, icons once they do not. -->
         <div class="ml-auto flex shrink-0 items-center gap-1.5">
