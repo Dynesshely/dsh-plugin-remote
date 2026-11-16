@@ -492,7 +492,10 @@ function buildTranscriptItems () {
       continue
     }
     if (type === 'tool/result') {
-      const callId = String(data.message?.toolCallId ?? '')
+      // DSH puts the id on `data.callId`; `message.toolCallId` is the ACP spelling and is absent here. Reading
+      // only the ACP field made this an empty string, so results never found their call and every tool stayed
+      // "running" forever.
+      const callId = String(data.callId ?? data.message?.toolCallId ?? '')
       const item = toolIndex.get(callId)
       if (item !== undefined) {
         item.result = blocksToText(data.message)

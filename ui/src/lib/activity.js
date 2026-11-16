@@ -50,9 +50,14 @@ export const activity = computed(() => {
     const key = SHELL_TOOLS.has(name) ? 'run.toolShell' : 'run.tool'
     return { key, label: t(key, { name }), icon: SHELL_TOOLS.has(name) ? 'cpu' : 'wrench', busy: true, tone: 'running' }
   }
-  if (item?.kind === 'toolGroup' && item.state?.running === true) {
-    const name = String(item.name ?? '')
-    return { key: 'run.tool', label: t('run.tool', { name }), icon: 'wrench', busy: true, tone: 'running' }
+  if (item?.kind === 'toolGroup') {
+    const children = Array.isArray(item.items) ? item.items : []
+    const open = children.find((child) => child.result === undefined && child.error === undefined)
+    if (open !== undefined) {
+      const name = String(item.name ?? open.name ?? '')
+      const key = SHELL_TOOLS.has(name) ? 'run.toolShell' : 'run.tool'
+      return { key, label: t(key, { name }), icon: SHELL_TOOLS.has(name) ? 'cpu' : 'wrench', busy: true, tone: 'running' }
+    }
   }
 
   // Reasoning arrives before text; while only reasoning is streaming, the model is thinking rather than writing.

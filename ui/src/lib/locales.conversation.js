@@ -45,6 +45,8 @@ export const zhCN = {
   'sidebar.pin': '置顶会话',
   'sidebar.unpin': '取消置顶',
   'sidebar.fork': '从最后已结束轮次分叉',
+  'sidebar.copySessionId': '复制会话 ID',
+  'sidebar.copyFailed': '无法写入剪贴板，请手动复制：{id}',
   'sidebar.restarting': 'DSH 正在重启，页面会在它回来后自动重连',
   'sidebar.exiting': 'DSH 正在退出，本页面将失去连接',
 
@@ -137,6 +139,8 @@ export const enUS = {
   'sidebar.pin': 'Pin session',
   'sidebar.unpin': 'Unpin',
   'sidebar.fork': 'Fork from the last finished turn',
+  'sidebar.copySessionId': 'Copy session id',
+  'sidebar.copyFailed': 'Could not write to the clipboard; copy it manually: {id}',
   'sidebar.restarting': 'DSH is restarting; the page reconnects once it is back',
   'sidebar.exiting': 'DSH is quitting; this page will lose its connection',
 

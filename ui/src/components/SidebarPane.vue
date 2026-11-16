@@ -51,6 +51,62 @@ const WS_COLLAPSE_KEY = 'rc.wsCollapsed'
 const collapsedWorkspaces = ref(readWsCollapsed())
 
 /** @returns the persisted folded workspace ids. */
+/**
+ * @param group - one row of the tree.
+ * @returns whether anything under this workspace is currently visible.
+ *
+ * The click folds the subtree and the Session list together, so the arrow has to read both: otherwise the arrow
+ * points down while one of the two is closed.
+ */
+function isBranchOpen (group) {
+  if (group.hasChildren === true && group.folded === true) return false
+  return !isCollapsed(group.id)
+}
+
+/**
+ * Fold a workspace branch.
+ * @param group - one row of the tree.
+ *
+ * Collapsing a workspace means closing everything under it: its own Session list and its child workspaces. The
+ * two used to be separate switches — a parent with children only toggled the subtree, so its own Sessions stayed
+ * open and the arrow claimed a state the list did not agree with.
+ */
+function toggleBranch (group) {
+  // Write the target state into both sets rather than flipping each one. Flipping assumes the two were in
+  // agreement to begin with — and they were not: an earlier version moved only the subtree, the disagreement was
+  // persisted, and every later flip kept them exactly as wrong as they started. Setting both to the same value
+  // repairs the state on the first click instead of relying on history.
+  const folded = isBranchOpen(group)
+  setGroupCollapsed(group.id, folded)
+  if (group.hasChildren === true) setWorkspaceFolded(group.id, folded)
+}
+
+/**
+ * @param id - the workspace.
+ * @param folded - the state to store.
+ */
+function setWorkspaceFolded (id, folded) {
+  const has = collapsedWorkspaces.value.includes(id)
+  if (has === folded) return
+  collapsedWorkspaces.value = folded
+    ? [...collapsedWorkspaces.value, id]
+    : collapsedWorkspaces.value.filter((candidate) => candidate !== id)
+  try {
+    window.localStorage.setItem(WS_COLLAPSE_KEY, JSON.stringify(collapsedWorkspaces.value))
+  } catch {
+    /* a blocked storage keeps the in-memory state */
+  }
+}
+
+/**
+ * @param id - the workspace.
+ * @param folded - the state to store.
+ */
+function setGroupCollapsed (id, folded) {
+  if (isCollapsed(id) === folded) return
+  toggle(id)
+}
+
 /** Fold or unfold one workspace branch and remember it. */
 function toggleWorkspace (id) {
   const folded = collapsedWorkspaces.value.includes(id)
@@ -86,6 +142,15 @@ function readCollapsed () {
 }
 
 const collapsed = ref(readCollapsed())
+// Merge the two persisted sets once. They were written by code that only ever moved one of them, so a stored
+// disagreement is the normal case for anyone who used the tree before this fix — take the union, which keeps
+// whatever the reader had closed.
+const alignedOnLoad = true
+if (alignedOnLoad) {
+  const merged = new Set([...collapsed.value, ...collapsedWorkspaces.value])
+  collapsed.value = [...merged]
+  collapsedWorkspaces.value = [...merged]
+}
 /**
  * 每个工作区默认只显示最近 N 个会话。
  *
@@ -106,6 +171,8 @@ const isSearching = computed(() => query.value.trim() !== '')
 const archivedOpen = ref(false)
 /** The row whose action menu is open, plus its screen position (the list scrolls, so it is fixed). */
 const menuFor = ref(undefined)
+/** The Session id just copied, so the row can confirm it for a moment. */
+const copiedId = ref(undefined)
 const menuAt = ref({ left: 0, top: 0 })
 /** Inline rename state (desktop); mobile uses the dialog instead. */
 const renamingId = ref(undefined)
@@ -283,6 +350,19 @@ async function act (kind) {
     renameInput.value?.[0]?.focus?.() ?? renameInput.value?.focus?.()
     return
   }
+  if (kind === 'copyId') {
+    // The clipboard is unavailable over plain HTTP on some LAN origins, so a failed write still tells the reader
+    // what to copy by hand instead of failing silently.
+    try {
+      await navigator.clipboard.writeText(session.id)
+      state.actionError = ''
+      copiedId.value = session.id
+      window.setTimeout(() => { if (copiedId.value === session.id) copiedId.value = undefined }, 1500)
+    } catch {
+      state.actionError = t('sidebar.copyFailed', { id: session.id })
+    }
+    return
+  }
   if (kind === 'archive') {
     dialog.value = { kind: 'archive', session, archived: !state.archivedSessionIds.includes(session.id), stopActivity: false }
     return
@@ -395,6 +475,9 @@ function entriesFor (session) {
     { kind: 'pin', label: isPinned(session.id) ? t('sidebar.unpin') : t('sidebar.pin'), icon: 'pin' },
     { kind: 'rename', label: t('action.rename'), icon: 'pencil' },
     { kind: 'fork', label: t('sidebar.fork'), icon: 'fork' },
+    // The id is what a bug report or a `dsh` command needs, and the sidebar never shows it: copying is the only
+    // way to get at it from this page.
+    { kind: 'copyId', label: t('sidebar.copySessionId'), icon: 'copy' },
   ]
 }
 </script>
@@ -465,8 +548,8 @@ function entriesFor (session) {
         <button
           type="button"
           class="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-fill-chip"
-          :aria-expanded="group.hasChildren === true ? group.folded !== true : !isCollapsed(group.id)"
-          @click="group.hasChildren === true ? toggleWorkspace(group.id) : toggle(group.id)"
+          :aria-expanded="isBranchOpen(group)"
+          @click="toggleBranch(group)"
         >
           <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gradient-to-b from-white/80 to-white/40 text-secondary shadow-[0_2px_8px_-6px_rgb(15_23_42/0.6)] dark:from-white/[0.14] dark:to-white/[0.06] text-muted">
             <AppIcon name="layers" :size="13" />
@@ -486,7 +569,7 @@ function entriesFor (session) {
             name="chevron"
             :size="13"
             class="shrink-0 text-tertiary transition-transform duration-200"
-            :class="(group.hasChildren === true ? group.folded === true : isCollapsed(group.id)) ? '-rotate-90' : ''"
+            :class="isBranchOpen(group) ? '' : '-rotate-90'"
           />
         </button>
 

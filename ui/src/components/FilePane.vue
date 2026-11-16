@@ -302,6 +302,8 @@ function runMenu (action) {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onMenuKeydown)
+  actionsObserver?.disconnect()
+  actionsObserver = undefined
 })
 
 /** @returns whether a row is selected. */
@@ -675,6 +677,51 @@ function startMarquee (event) {
   event.preventDefault()
 }
 
+/** The whole action row, measured to decide whether its buttons still fit. */
+const actionsBox = ref(null)
+/** Kept so the observer can be disconnected with the panel. */
+let actionsObserver
+/** True when the row is too narrow for eight buttons, so they collapse into one menu. */
+const actionsCompact = ref(false)
+/** The open action menu: `{ left, top }`, or undefined. */
+const actionsMenu = ref(undefined)
+
+/** Below this the eight buttons plus dividers no longer fit on one line. */
+const ACTIONS_MIN_WIDTH = 300
+
+/**
+ * Re-measure the action row.
+ *
+ * Wrapping was the old answer to a narrow column, and it produced two ragged rows of circles. Collapsing into one
+ * menu keeps the row a constant height and keeps every action reachable.
+ */
+function measureActions () {
+  const box = actionsBox.value
+  if (box === null) return
+  const next = box.clientWidth < ACTIONS_MIN_WIDTH
+  if (actionsCompact.value !== next) actionsCompact.value = next
+}
+
+/** Open the collapsed action menu under the row. */
+function openActionsMenu (event) {
+  const rect = event.currentTarget.getBoundingClientRect()
+  actionsMenu.value = { left: Math.max(8, rect.right - 176), top: rect.bottom + 4 }
+}
+
+/** Close the collapsed action menu. */
+function closeActionsMenu () {
+  actionsMenu.value = undefined
+}
+
+/**
+ * Run one collapsed action.
+ * @param run - the action to perform after the menu closes.
+ */
+function runAction (run) {
+  actionsMenu.value = undefined
+  run()
+}
+
 /** Clicking the list's blank space clears the selection, unless the click was part of a drag. */
 function clearOnBlankClick (event) {
   if (event.target instanceof Element && event.target.closest('[data-entry]') !== null) return
@@ -823,6 +870,14 @@ async function jumpToSession () {
 
 onMounted(() => {
   window.addEventListener('keydown', onMenuKeydown)
+  // The row is measured, not guessed from a viewport breakpoint: only the element knows how much room it has.
+  const box = actionsBox.value
+  if (box !== null && typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => { measureActions() })
+    observer.observe(box)
+    actionsObserver = observer
+  }
+  measureActions()
 
   workspaceId.value = sessionWorkspace.value
   void open('')
@@ -853,9 +908,10 @@ watch(() => state.selected, () => {
 
     <!--
       Workspace selector and the eight actions share one row: three that create content, a divider, then
-      five that act on the selection. The selector yields width first, so the buttons never shrink or wrap.
+      five that act on the selection. The row is measured; when it gets too narrow for eight buttons they
+      collapse into one menu instead of being squeezed or wrapped.
     -->
-    <div class="flex shrink-0 items-center gap-2 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
+    <div ref="actionsBox" class="flex shrink-0 items-center gap-2 px-1.5 pb-1.5 [&_.control]:h-7 [&_.control]:py-0">
       <!--
         The picker is only as wide as its own label: a workspace name is short, and stretching it across the row
         left a large dead field that looked interactive but was not. The space that frees up sits between the
@@ -873,43 +929,56 @@ watch(() => state.selected, () => {
       </div>
       <div class="min-w-2 flex-1" />
       <!-- Icon-only: the panel is narrow, and labelled chips would push the selector off the row. -->
-      <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFolder')" :aria-label="t('files.newFolder')" :disabled="busy !== ''" @click="create('dir')">
-        <AppIcon name="folder" :size="13" />
-      </button>
-      <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFile')" :aria-label="t('files.newFile')" :disabled="busy !== ''" @click="create('file')">
-        <AppIcon name="file" :size="13" />
-      </button>
-      <label
-        class="icon-btn h-7 w-7 cursor-pointer"
-        :class="busy !== '' ? 'pointer-events-none opacity-40' : ''"
-        :title="t('files.upload')"
-        :aria-label="t('files.upload')"
-      >
-        <AppIcon name="paperclip" :size="13" />
-        <input type="file" multiple class="hidden" :disabled="busy !== ''" @change="upload($event.target)" />
-      </label>
-      <span class="mx-0.5 h-4 w-px shrink-0 bg-outline-variant" />
-      <button class="icon-btn h-7 w-7" type="button" :title="t('action.rename')" :aria-label="t('action.rename')" :disabled="busy !== '' || selection.size !== 1" @click="renameSelected">
-        <AppIcon name="pencil" :size="13" />
-      </button>
-      <button class="icon-btn h-7 w-7" type="button" :title="t('action.copy')" :aria-label="t('action.copy')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('copy')">
-        <AppIcon name="copy" :size="13" />
-      </button>
-      <button class="icon-btn h-7 w-7" type="button" :title="t('action.cut')" :aria-label="t('action.cut')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('move')">
-        <AppIcon name="cut" :size="13" />
-      </button>
+      <template v-if="!actionsCompact">
+        <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFolder')" :aria-label="t('files.newFolder')" :disabled="busy !== ''" @click="create('dir')">
+          <AppIcon name="folder" :size="13" />
+        </button>
+        <button class="icon-btn h-7 w-7" type="button" :title="t('files.newFile')" :aria-label="t('files.newFile')" :disabled="busy !== ''" @click="create('file')">
+          <AppIcon name="file" :size="13" />
+        </button>
+        <label
+          class="icon-btn h-7 w-7 cursor-pointer"
+          :class="busy !== '' ? 'pointer-events-none opacity-40' : ''"
+          :title="t('files.upload')"
+          :aria-label="t('files.upload')"
+        >
+          <AppIcon name="paperclip" :size="13" />
+          <input type="file" multiple class="hidden" :disabled="busy !== ''" @change="upload($event.target)" />
+        </label>
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-outline-variant" />
+        <button class="icon-btn h-7 w-7" type="button" :title="t('action.rename')" :aria-label="t('action.rename')" :disabled="busy !== '' || selection.size !== 1" @click="renameSelected">
+          <AppIcon name="pencil" :size="13" />
+        </button>
+        <button class="icon-btn h-7 w-7" type="button" :title="t('action.copy')" :aria-label="t('action.copy')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('copy')">
+          <AppIcon name="copy" :size="13" />
+        </button>
+        <button class="icon-btn h-7 w-7" type="button" :title="t('action.cut')" :aria-label="t('action.cut')" :disabled="busy !== '' || !hasSelection" @click="clipSelected('move')">
+          <AppIcon name="cut" :size="13" />
+        </button>
+        <button
+          class="icon-btn h-7 w-7"
+          type="button"
+          :title="clip === undefined ? t('files.pasteEmpty') : t('files.pasteCount', { count: clip.items.length })"
+          :aria-label="t('action.paste')"
+          :disabled="busy !== '' || clip === undefined"
+          @click="pasteHere"
+        >
+          <AppIcon name="file" :size="13" />
+        </button>
+        <button class="icon-btn h-7 w-7 text-danger" type="button" :title="t('action.delete')" :aria-label="t('action.delete')" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
+          <AppIcon name="trash" :size="13" />
+        </button>
+      </template>
+      <!-- Collapsed: one button that opens the same actions, so the row keeps its height. -->
       <button
-        class="icon-btn h-7 w-7"
+        v-else
+        class="icon-btn h-7 w-7 shrink-0"
         type="button"
-        :title="clip === undefined ? t('files.pasteEmpty') : t('files.pasteCount', { count: clip.items.length })"
-        :aria-label="t('action.paste')"
-        :disabled="busy !== '' || clip === undefined"
-        @click="pasteHere"
+        :title="t('files.moreActions')"
+        :aria-label="t('files.moreActions')"
+        @click="openActionsMenu"
       >
-        <AppIcon name="file" :size="13" />
-      </button>
-      <button class="icon-btn h-7 w-7 text-danger" type="button" :title="t('action.delete')" :aria-label="t('action.delete')" :disabled="busy !== '' || !hasSelection" @click="deleteSelected">
-        <AppIcon name="trash" :size="13" />
+        <AppIcon name="more" :size="13" />
       </button>
     </div>
 
@@ -1120,6 +1189,48 @@ watch(() => state.selected, () => {
         <p v-if="listing?.truncated" class="px-2 pt-2 text-[10px] text-warning-on">
           {{ t('files.tooMany') }}
         </p>
+
+        <!--
+          Collapsed action menu. Same reason for the Teleport: the row is inside the panel, and a menu inside it
+          would be clipped at the panel edge.
+        -->
+        <Teleport to="body">
+          <div v-if="actionsMenu !== undefined" class="fixed inset-0 z-[160]" @pointerdown="closeActionsMenu">
+            <div
+              class="file-menu absolute"
+              :style="{ left: `${String(actionsMenu.left)}px`, top: `${String(actionsMenu.top)}px` }"
+              @pointerdown.stop
+            >
+              <button type="button" class="file-menu-item" :disabled="busy !== ''" @click="runAction(() => create('dir'))">
+                <AppIcon name="folder" :size="12" /><span>{{ t('files.newFolder') }}</span>
+              </button>
+              <button type="button" class="file-menu-item" :disabled="busy !== ''" @click="runAction(() => create('file'))">
+                <AppIcon name="file" :size="12" /><span>{{ t('files.newFile') }}</span>
+              </button>
+              <label class="file-menu-item cursor-pointer" :class="busy !== '' ? 'pointer-events-none opacity-40' : ''">
+                <AppIcon name="paperclip" :size="12" /><span>{{ t('files.upload') }}</span>
+                <input type="file" multiple class="hidden" :disabled="busy !== ''" @change="upload($event.target)" />
+              </label>
+              <div class="file-menu-separator" />
+              <button type="button" class="file-menu-item" :disabled="busy !== '' || selection.size !== 1" @click="runAction(() => renameSelected())">
+                <AppIcon name="pencil" :size="12" /><span>{{ t('action.rename') }}</span>
+              </button>
+              <button type="button" class="file-menu-item" :disabled="busy !== '' || !hasSelection" @click="runAction(() => clipSelected('copy'))">
+                <AppIcon name="copy" :size="12" /><span>{{ t('action.copy') }}</span>
+              </button>
+              <button type="button" class="file-menu-item" :disabled="busy !== '' || !hasSelection" @click="runAction(() => clipSelected('move'))">
+                <AppIcon name="cut" :size="12" /><span>{{ t('action.cut') }}</span>
+              </button>
+              <button type="button" class="file-menu-item" :disabled="busy !== '' || clip === undefined" @click="runAction(() => pasteHere())">
+                <AppIcon name="file" :size="12" /><span>{{ t('action.paste') }}</span>
+              </button>
+              <div class="file-menu-separator" />
+              <button type="button" class="file-menu-item file-menu-danger" :disabled="busy !== '' || !hasSelection" @click="runAction(() => deleteSelected())">
+                <AppIcon name="trash" :size="12" /><span>{{ t('action.delete') }}</span>
+              </button>
+            </div>
+          </div>
+        </Teleport>
 
         <!--
           Row menu. Teleported to the body because the list scrolls and clips: a menu inside it would be cut off
