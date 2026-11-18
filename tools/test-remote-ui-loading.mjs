@@ -21,11 +21,15 @@ import {
 
 // Same reason as the rail suite: `loadMessage` is localised now, so the dictionaries have to exist before it is
 // called, otherwise these assertions would see the key fallback rather than a sentence.
-import { install } from '../ui/src/lib/i18n.js'
+import { install, setLang } from '../ui/src/lib/i18n.js'
 import { enUS, zhCN } from '../ui/src/lib/locales.js'
 import { zhCN as shellZh, enUS as shellEn } from '../ui/src/lib/locales.shell.js'
 install('zh-CN', { ...zhCN, ...shellZh })
 install('en-US', { ...enUS, ...shellEn })
+
+// The assertions below are written against the Chinese dictionary, so the language is pinned rather than
+// inherited from the machine running the suite.
+setLang('zh-CN')
 
 let checks = 0
 

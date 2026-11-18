@@ -6,12 +6,16 @@ import { BOTTOM_SNAP, activeTick, previewCentre, promptTicks, tickCellHeight } f
 
 // The dictionaries are installed by main.js at boot; a unit test has to do it itself, or every localised string
 // comes back as its key and the assertions below would be testing the fallback instead of the text.
-import { install } from '../ui/src/lib/i18n.js'
+import { install, setLang } from '../ui/src/lib/i18n.js'
 import { enUS, zhCN } from '../ui/src/lib/locales.js'
 import { zhCN as convZh, enUS as convEn } from '../ui/src/lib/locales.conversation.js'
 import { zhCN as miscZh, enUS as miscEn } from '../ui/src/lib/locales.misc.js'
 install('zh-CN', { ...zhCN, ...convZh, ...miscZh })
 install('en-US', { ...enUS, ...convEn, ...miscEn })
+
+// The assertions below are written against the Chinese dictionary, so the language is pinned rather than
+// inherited from the machine running the suite.
+setLang('zh-CN')
 
 let failures = 0
 function check (name, fn) {

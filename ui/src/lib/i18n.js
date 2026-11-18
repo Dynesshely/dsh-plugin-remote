@@ -29,7 +29,7 @@ function readLang () {
   } catch {
     /* storage unavailable: fall through to the browser preference */
   }
-  const preferred = String(navigator.language ?? '')
+  const preferred = typeof navigator === 'undefined' ? '' : String(navigator.language ?? '')
   return preferred.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
 }
 
@@ -71,7 +71,9 @@ export function setLang (code) {
   } catch {
     /* in-memory only */
   }
-  document.documentElement.lang = lang.value
+  // The same module runs in Node under the test suites, where there is no document. Setting the page language is a
+  // browser courtesy, not a requirement of switching dictionaries, so it is skipped rather than thrown on.
+  if (typeof document !== 'undefined') document.documentElement.lang = lang.value
 }
 
 /**
