@@ -1,0 +1,118 @@
+name: CI
+
+# Every push and every pull request: does it still parse, still build, still pass the seven suites.
+#
+# The syntax pass runs first and separately from the build on purpose. A build failure tells you "something broke";
+# a syntax failure tells you which file and which line, and it fails in seconds instead of after installing
+# dependencies. On a plugin whose entry point is a single 2000-line module, that difference matters.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `node --check` parses without executing, so this needs no dependencies and catches a broken file before the
+      # slower build would.
+      - name: Parse every module
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r file; do
+            if ! node --check "$file"; then
+              echo "::error file=$file::failed to parse"
+              fail=1
+            fi
+          done < <(find . -path ./ui/node_modules -prune -o -path ./ui/dist -prune -o -name '*.js' -print -o -name '*.mjs' -print)
+          exit "$fail"
+
+      - name: Validate JSON manifests
+        run: |
+          set -euo pipefail
+          for file in package.json ui/package.json; do
+            node -e "JSON.parse(require('node:fs').readFileSync('$file', 'utf8'))" \
+              || { echo "::error file=$file::invalid JSON"; exit 1; }
+          done
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Build the SPA
+        working-directory: ui
+        run: pnpm run build
+      - name: Assert the bundle is complete
+        working-directory: ui
+        run: |
+          set -euo pipefail
+          test -f dist/index.html || { echo "::error::dist/index.html is missing"; exit 1; }
+          # The shell must reference the bundle through the mount path, or the proxied page loads the wrong root.
+          grep -q '/remote/assets/' dist/index.html || {
+            echo "::error::dist/index.html does not reference /remote/assets/ — the vite base is wrong"
+            exit 1
+          }
+
+  suites:
+    name: Suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - name: Install
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Build the SPA
+        working-directory: ui
+        run: pnpm run build
+      # `test-remote-control` starts a real listener and fetches from it, so the build has to exist first.
+      - name: Run every suite
+        run: |
+          set -euo pipefail
+          fail=0
+          for suite in tools/test-*.mjs; do
+            echo "::group::$suite"
+            if node "$suite"; then
+              echo "::endgroup::"
+            else
+              echo "::error file=$suite::suite failed"
+              echo "::endgroup::"
+              fail=1
+            fi
+          done
+          exit "$fail"

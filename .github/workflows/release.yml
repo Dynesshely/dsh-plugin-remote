@@ -1,0 +1,133 @@
+name: Release
+
+# Fires only for a version tag. Pushing `v1.2.0` releases 1.2.0; nothing else triggers this.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      # ---------------------------------------------------------------------
+      # The tag is the source of truth. Everything below compares against it.
+      # ---------------------------------------------------------------------
+      - name: Resolve the version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$tag' is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved $tag -> $version"
+
+      # A tag that disagrees with the manifest would ship a build labelled one version and published as another.
+      # Rather than fail the run and leave the two out of step, the manifests are raised to the tag and committed —
+      # the tag stays the source of truth, which is what the person tagging intended.
+      - name: Align the manifests with the tag
+        id: align
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          changed=0
+          for file in package.json ui/package.json; do
+            current=$(node -p "require('./$file').version")
+            if [ "$current" != "$version" ]; then
+              echo "$file: $current -> $version"
+              node -e "
+                const fs = require('node:fs')
+                const p = '$file'
+                const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+                data.version = '$version'
+                fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n')
+              "
+              changed=1
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the version bump
+        if: steps.align.outputs.changed == '1'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json ui/package.json
+          # `[skip ci]` keeps this commit from starting a second full run over a manifest-only change.
+          git commit -m "chore(发版): ${GITHUB_REF_NAME} 版本号对齐"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
+
+      - name: Install
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the SPA
+        working-directory: ui
+        run: pnpm run build
+
+      - name: Verify the build before publishing
+        run: |
+          set -euo pipefail
+          test -f ui/dist/index.html || { echo "::error::dist/index.html is missing"; exit 1; }
+          grep -q '/remote/assets/' ui/dist/index.html || {
+            echo "::error::dist/index.html does not reference /remote/assets/"
+            exit 1
+          }
+          for suite in tools/test-*.mjs; do
+            echo "::group::$suite"
+            node "$suite" || { echo "::error file=$suite::suite failed"; exit 1; }
+            echo "::endgroup::"
+          done
+
+      # The package is what a profile installs: the Host modules, the SPA already built, and the manifest.
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="dsh-remote-control-${GITHUB_REF_NAME}"
+          mkdir -p "out/$name"
+          cp -r index.js package.json icon.svg cordis.patch.yml CHANGELOG.md LICENSE "$name" 2>/dev/null || true
+          cp -r host tools "out/$name/"
+          mkdir -p "out/$name/ui"
+          cp -r ui/dist "out/$name/ui/"
+          cp ui/package.json "out/$name/ui/"
+          # Tests and their fixtures have no place in an installed copy.
+          rm -rf "out/$name/tools"
+          (cd out && zip -qr "$name.zip" "$name")
+          ls -lh "out/$name.zip"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: out/dsh-remote-control-${{ github.ref_name }}.zip
+          fail_on_unmatched_files: true
+          # A release is final; re-running the workflow must not replace what people already downloaded.
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
