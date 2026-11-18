@@ -531,8 +531,8 @@ async function saveUsageConfig (api) {
  */
 export async function handleUsage (api) {
   const { method } = api.request
-  if (method === 'GET' && api.url.pathname === '/api/usage') return await usage(api)
-  if (method === 'GET' && api.url.pathname === '/api/usage/config') return usageConfig(api)
-  if (method === 'POST' && api.url.pathname === '/api/usage/config') return await saveUsageConfig(api)
+  if (method === 'GET' && api.url.pathname === '/remote/api/usage') return await usage(api)
+  if (method === 'GET' && api.url.pathname === '/remote/api/usage/config') return usageConfig(api)
+  if (method === 'POST' && api.url.pathname === '/remote/api/usage/config') return await saveUsageConfig(api)
   return false
 }

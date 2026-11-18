@@ -1061,20 +1061,20 @@ export async function handle (api) {
   if (await fileRoutes(api)) return true
   const method = api.request.method
   if (method === 'GET') {
-    if (api.url.pathname === '/api/attachment') return await attachmentImage(api)
-    if (api.url.pathname === '/api/presets') return await presets(api)
-    if (api.url.pathname === '/api/dsh/info') return dshInfo(api)
+    if (api.url.pathname === '/remote/api/attachment') return await attachmentImage(api)
+    if (api.url.pathname === '/remote/api/presets') return await presets(api)
+    if (api.url.pathname === '/remote/api/dsh/info') return dshInfo(api)
     return false
   }
   if (method !== 'POST') return false
   switch (api.url.pathname) {
-    case '/api/session/pin': return await pin(api)
-    case '/api/session/rename': return await rename(api)
-    case '/api/session/fork': return await fork(api)
-    case '/api/session/archive': return await archive(api)
-    case '/api/session/create': return await create(api)
-    case '/api/dsh/restart': return await dshControl(api, 'restart')
-    case '/api/dsh/exit': return await dshControl(api, 'exit')
+    case '/remote/api/session/pin': return await pin(api)
+    case '/remote/api/session/rename': return await rename(api)
+    case '/remote/api/session/fork': return await fork(api)
+    case '/remote/api/session/archive': return await archive(api)
+    case '/remote/api/session/create': return await create(api)
+    case '/remote/api/dsh/restart': return await dshControl(api, 'restart')
+    case '/remote/api/dsh/exit': return await dshControl(api, 'exit')
     default: return false
   }
 }

@@ -82,7 +82,7 @@ const usageSaved = ref(false)
 /** Load the usage providers, which arrive with keys reduced to a hint. */
 async function loadUsageConfig () {
   try {
-    const payload = await api('/api/usage/config')
+    const payload = await api('/remote/api/usage/config')
     usageGateway.value = {
       url: String(payload.gateway?.url ?? ''),
       enabled: payload.gateway?.enabled !== false,
@@ -112,7 +112,7 @@ async function saveUsageConfig () {
   usageSaving.value = true
   usageSaved.value = false
   try {
-    await api('/api/usage/config', {
+    await api('/remote/api/usage/config', {
       method: 'POST',
       body: {
         gateway: {

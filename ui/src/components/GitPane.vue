@@ -10,7 +10,7 @@ import ComboBox from './ComboBox.vue'
  * Git status tool.
  *
  * Shows the workspace's branch and every changed path, and opens the patch for whichever file is clicked. The
- * data comes from the real `git` binary through `/api/git/status`, so what the panel shows is what the user's own
+ * data comes from the real `git` binary through `/remote/api/git/status`, so what the panel shows is what the user's own
  * tooling would say.
  */
 
@@ -92,7 +92,7 @@ function describe (file) {
 async function loadRepos () {
   try {
     const query = new URLSearchParams({ workspaceId: workspaceId.value })
-    const payload = await api(`/api/git/repos?${query.toString()}`, { timeoutMs: 30_000 })
+    const payload = await api(`/remote/api/git/repos?${query.toString()}`, { timeoutMs: 30_000 })
     repos.value = Array.isArray(payload.repositories) ? payload.repositories : []
     // Keep the selection when it still exists, otherwise take the first — a workspace root repository first,
     // since that is the common case for a single checkout.
@@ -114,7 +114,7 @@ async function load () {
   try {
     const query = new URLSearchParams({ workspaceId: workspaceId.value })
     if (repo.value !== '') query.set('repo', repo.value)
-    status.value = await api(`/api/git/status?${query.toString()}`, { timeoutMs: 20_000 })
+    status.value = await api(`/remote/api/git/status?${query.toString()}`, { timeoutMs: 20_000 })
   } catch (problem) {
     error.value = String(problem.message ?? problem)
   } finally {
@@ -152,7 +152,7 @@ async function showPatch (file) {
       staged: selected.value.staged ? '1' : '0',
     })
     if (repo.value !== '') query.set('repo', repo.value)
-    const payload = await api(`/api/git/diff?${query.toString()}`, { timeoutMs: 20_000 })
+    const payload = await api(`/remote/api/git/diff?${query.toString()}`, { timeoutMs: 20_000 })
     if (payload.ok === false) patchError.value = String(payload.error ?? t('git.diffFailed'))
     else patch.value = String(payload.patch ?? '')
   } catch (problem) {

@@ -50,7 +50,7 @@ const DEFAULT_TIMEOUT_MS = 20_000
  * 响应正文的字符数上限，超过就不解析。
  *
  * 解析 8MB 的 JSON 即使搬进 Worker 也要占住那份 Worker 数百毫秒到数秒；而正常响应里
- * 出现这么大的正文基本只有异常这解释（`/api/older` 2.8MB 已是顶端）。宁可让这一次请求
+ * 出现这么大的正文基本只有异常这解释（`/remote/api/older` 2.8MB 已是顶端）。宁可让这一次请求
  * 明确失败，也不要把页面拖进「未响应」。
  */
 const MAX_RESPONSE_CHARS = 8 * 1024 * 1024
@@ -67,7 +67,7 @@ const MAX_RESPONSE_CHARS = 8 * 1024 * 1024
  */
 const PROJECTIONS = {
   // 页面读：bind / sessions / workspaces / pending / telemetry / 管理集合 / urls（候选地址展示）。
-  '/api/state': {
+  '/remote/api/state': {
     bind: true,
     // 会话行只读这 6 个字段（SidebarPane / FilePane / store 的访问点已逐个核对）：
     // id、title、updatedAt、running、origin、workspaceId。宿主还会额外带 cwd、日志路径、
@@ -82,7 +82,7 @@ const PROJECTIONS = {
     urls: true,
   },
   // 页面只读 records（每条只用到 type 与 event）和 hasMore；记录上的其它元数据没人读。
-  '/api/older': {
+  '/remote/api/older': {
     records: { type: true, event: true },
     hasMore: true,
   },
@@ -94,7 +94,7 @@ export const ROUTE_PROJECTIONS = PROJECTIONS
 /**
  * 回传分片的字符预算：约 256 KB。
  *
- * 一次 structured clone 的耗时与体量近似线性。2.8MB 的 `/api/older` 一次性克隆是几十毫秒的长任务；
+ * 一次 structured clone 的耗时与体量近似线性。2.8MB 的 `/remote/api/older` 一次性克隆是几十毫秒的长任务；
  * 切成十几片之后，每条消息只搬一小段，主线程每次回到事件循环的都很快（分片数量与单片上限见
  * `worker-client.js` 的 `splitValueForTransfer`，单片条目不超过 2000）。
  */
@@ -109,7 +109,7 @@ function routeOf (path) {
 /**
  * 解析响应正文。
  *
- * 走 Worker 的理由：`/api/older` 单次 2.8MB、`/api/state` 也有几十 KB，在主线程 `JSON.parse`
+ * 走 Worker 的理由：`/remote/api/older` 单次 2.8MB、`/remote/api/state` 也有几十 KB，在主线程 `JSON.parse`
  * 就是一次实打实的长任务（输入、滚动、高亮全部停摆）。单例维护在 worker-client.js 内部，
  * 所以这里直接取即可，不再自己缓存一份——两处各缓存会得到两个 Worker。
  * @param text - 已经读成文本的响应正文。
@@ -173,7 +173,7 @@ export async function uploadImage (source, options = {}) {
   if (options.signal !== undefined) signals.push(options.signal)
   let response
   try {
-    response = await fetch(`/api/attachment?${query.toString()}`, {
+    response = await fetch(`/remote/api/attachment?${query.toString()}`, {
       method: 'POST',
       headers: { 'x-rc': '1', 'content-type': mediaType },
       // 关键：body 就是 Blob 本身。浏览器按字节流发送，既不 base64 也不进 JS 堆。
@@ -201,7 +201,7 @@ export async function uploadImage (source, options = {}) {
  * （看起来就是一片黑）。失败就明确失败，调用方才能提示令牌无效或网络不可达。
  */
 export async function login (token) {
-  const response = await fetch('/api/login', {
+  const response = await fetch('/remote/api/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rc': '1' },
     body: JSON.stringify({ token }),
@@ -307,7 +307,7 @@ export function openStream (sessionId, handlers) {
     entry.items.push(payload)
     if (!draining) void drain()
   }
-  const source = new EventSource(`/api/stream?sessionId=${encodeURIComponent(sessionId)}`)
+  const source = new EventSource(`/remote/api/stream?sessionId=${encodeURIComponent(sessionId)}`)
   /**
    * 这条连接上收到过多少次 `hello`。
    *

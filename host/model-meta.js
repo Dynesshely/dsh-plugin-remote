@@ -82,7 +82,7 @@ async function contextWindows () {
  * @returns whether the request was handled.
  */
 export async function handleModelMeta (api) {
-  if (api.request.method !== 'GET' || api.url.pathname !== '/api/model-meta') return false
+  if (api.request.method !== 'GET' || api.url.pathname !== '/remote/api/model-meta') return false
   const meta = await contextWindows()
   api.json(200, {
     ok: true,

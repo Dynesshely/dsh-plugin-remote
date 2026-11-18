@@ -15,7 +15,7 @@ import ComboBox from './ComboBox.vue'
  * `<img>`, `<video>`, `<audio>`, a PDF frame — because those already handle seeking, zooming and captions
  * correctly; only text and Markdown are rendered here.
  *
- * Binary bytes come from `/api/files/raw`, which sends the right content type and honours Range requests, so a
+ * Binary bytes come from `/remote/api/files/raw`, which sends the right content type and honours Range requests, so a
  * video can seek and a PDF renders inline instead of downloading.
  */
 
@@ -98,7 +98,7 @@ function kindOf (name) {
 const rawUrl = computed(() => {
   const target = preview.value?.path ?? ''
   const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
-  return `/api/files/raw?${query.toString()}`
+  return `/remote/api/files/raw?${query.toString()}`
 })
 
 /** @returns the workspace-relative path of an entry in the current directory. */
@@ -126,7 +126,7 @@ async function open (target) {
   body.value = ''
   try {
     const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
-    listing.value = await api(`/api/files?${query.toString()}`, { timeoutMs: 20_000 })
+    listing.value = await api(`/remote/api/files?${query.toString()}`, { timeoutMs: 20_000 })
     path.value = String(listing.value.path ?? target)
   } catch (problem) {
     error.value = String(problem.message ?? problem)
@@ -160,7 +160,7 @@ async function show (entry) {
   loading.value = true
   try {
     const query = new URLSearchParams({ workspaceId: workspaceId.value, path: preview.value.path })
-    const payload = await api(`/api/files/text?${query.toString()}`, { timeoutMs: 20_000 })
+    const payload = await api(`/remote/api/files/text?${query.toString()}`, { timeoutMs: 20_000 })
     body.value = String(payload.text ?? '')
   } catch (problem) {
     error.value = String(problem.message ?? problem)

@@ -32,7 +32,9 @@ function nonBlockingStylesheet () {
 // The bundle is served by the DSH Host plugin from `/`, possibly under a proxy prefix, so every
 // asset reference has to stay relative.
 export default defineConfig({
-  base: './',
+  // Absolute, not relative: the shell is served at /remote and /remote/, and a relative base would resolve one of
+  // them against the site root while DSH's own app is mounted there.
+  base: '/remote/',
   plugins: [vue(), tailwindcss(), nonBlockingStylesheet()],
   build: {
     outDir: 'dist',
