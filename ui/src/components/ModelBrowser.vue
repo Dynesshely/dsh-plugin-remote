@@ -14,7 +14,7 @@ import ModelMark from './ModelMark.vue'
  * catalogue and the gateway between them know about each model: its capacity, and whether it can think.
  */
 const props = defineProps({
-  /** The catalogue groups, as returned by `/api/models`. */
+  /** The catalogue groups, as returned by `/remote/api/models`. */
   groups: { type: Array, default: () => [] },
   /** The currently selected model id. */
   model: { type: String, default: '' },
@@ -105,14 +105,14 @@ const groups = computed(() => (props.groups.length > 0 ? props.groups : loaded.v
 onMounted(async () => {
   if (props.groups.length === 0) {
     try {
-      const catalogue = await api('/api/models')
+      const catalogue = await api('/remote/api/models')
       loaded.value = Array.isArray(catalogue.groups) ? catalogue.groups : []
     } catch {
       /* the empty state explains itself */
     }
   }
   try {
-    const payload = await api('/api/model-meta')
+    const payload = await api('/remote/api/model-meta')
     contextWindows.value = payload.contextWindows ?? {}
     metaSource.value = String(payload.source ?? '')
   } catch {

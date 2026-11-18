@@ -36,6 +36,7 @@
  * requires a JSON content type. Binding to anything but loopback is an explicit opt-in.
  */
 import { createServer, request as httpRequest } from 'node:http'
+import { createDshProxy } from './host/proxy.js'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, networkInterfaces } from 'node:os'
@@ -212,6 +213,14 @@ function presentedSecret (request) {
   if (typeof cookie === 'string' && cookie !== '') return cookie
   const header = request.headers.authorization
   if (typeof header === 'string' && header.startsWith('Bearer ')) return header.slice(7).trim()
+  // The token may also arrive in the query, which is how every printed link carries it. Without this the root
+  // route would reject a link that is otherwise valid and bounce the reader back to the gate.
+  try {
+    const query = new URL(request.url ?? '/', 'http://remote-control.invalid').searchParams.get('k')
+    if (typeof query === 'string' && query !== '') return query
+  } catch {
+    /* a malformed URL simply presents no token */
+  }
   return undefined
 }
 
@@ -239,7 +248,7 @@ async function readBuffer (request, limit) {
 /**
  * 刚上传、还没被发送引用的图片字节。
  *
- * 页面改成二进制直传之后，发送时不该再把整张图塞回 JSON：`/api/send` 只带一个短 `uploadId`，
+ * 页面改成二进制直传之后，发送时不该再把整张图塞回 JSON：`/remote/api/send` 只带一个短 `uploadId`，
  * 由宿主在这里找到字节、转成 harness 认识的内联 `data`（base64 在服务端做，页面主线程不再参与）。
  * 条目有 TTL 与总量双上限：草稿放久了会失效，但宿主内存不会无界增长；发送成功后立刻删除。
  */
@@ -262,7 +271,7 @@ function pruneStagedImages () {
  * @param bytes - 图片字节。
  * @param mediaType - 它的媒体类型。
  * @param name - 原始文件名（可选）。
- * @returns 可写进 `/api/send` 的短引用 `uploadId`。
+ * @returns 可写进 `/remote/api/send` 的短引用 `uploadId`。
  */
 function stageImageBytes (bytes, mediaType, name) {
   pruneStagedImages()
@@ -630,7 +639,7 @@ function readAsset (pathname) {
  * even as an SPA shell, because a client that asked for data would then parse a page as JSON.
  */
 function isApiPath (pathname) {
-  return pathname === '/api' || pathname.startsWith('/api/')
+  return pathname === '/remote/api' || pathname.startsWith('/remote/api/')
 }
 
 /**
@@ -638,7 +647,7 @@ function isApiPath (pathname) {
  * @returns whether a *missing* path should fall back to the SPA shell.
  *
  * The fallback rules, in the order they are decided:
- *   1. `/api/*` and `/healthz` never fall back — they are not documents.
+ *   1. `/remote/api/*` and `/healthz` never fall back — they are not documents.
  *   2. A path that carries a file extension (`/assets/x.js`) never falls back: answering HTML for a
  *      missing script makes the browser parse the page as JS and log a syntax error that points at
  *      the wrong problem. It gets a plain 404 instead.
@@ -704,8 +713,10 @@ function serveStatic (request, response, url) {
     sendHtmlPage(response, 503, MISSING_DIST_HTML)
     return
   }
-  const asset = readAsset(url.pathname)
-  const shell = asset === undefined && isSpaShell(url.pathname)
+  // The bundle is mounted at /remote; `readAsset`/`isSpaShell` work in bundle-relative terms.
+  const relative = url.pathname === '/remote' ? '/' : url.pathname.slice('/remote'.length)
+  const asset = readAsset(relative)
+  const shell = asset === undefined && isSpaShell(relative)
   const body = shell ? readShell() : asset?.body
   if (body === undefined) {
     // dist 在、index.html 不在说明构建没走完，按产物缺失处理比 404 更有指导性。
@@ -718,7 +729,7 @@ function serveStatic (request, response, url) {
   // 外壳与 bundle 是这个服务器发出的最大的两样东西，压缩是慢链路能用的前提；带 hash 的资源只压一次。
   const compress = body.length >= COMPRESS_MIN_BYTES && compressibleType(type) && acceptsGzip(request)
   const payload = compress
-    ? (immutable ? compressedAsset(url.pathname, body) : gzipSync(body))
+    ? (immutable ? compressedAsset(relative, body) : gzipSync(body))
     : body
   response.writeHead(200, {
     'content-type': type,
@@ -792,7 +803,7 @@ function sendProxyFailure (response, detail) {
  * Reverse-proxy one static GET to the Vite dev server.
  *
  * 生产形态宿主自己读 `ui/dist`；开发形态想用 Vite 的模块热替换，就得把 `/`、`/assets/*`、
- * `/@vite/client` 这些静态 GET 原样转给 dev server。`/api/*` 不在此列 —— 那是宿主自己的路由，
+ * `/@vite/client` 这些静态 GET 原样转给 dev server。`/remote/api/*` 不在此列 —— 那是宿主自己的路由，
  * 转过去页面就没有数据了。
  *
  * 转发是流式的（pipe），method 与 headers 原样带过去，dev server 的 status/headers 也原样回来：
@@ -1147,7 +1158,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
     }
   }
 
-  /** @returns the pending-interaction payload shared by `/api/state` and the SSE feed. */
+  /** @returns the pending-interaction payload shared by `/remote/api/state` and the SSE feed. */
   const pendingPayload = () => ({
     questions: [...questions.values()].map((record) => ({
       ...record,
@@ -1262,7 +1273,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return module
     } catch (error) {
       // A broken edit must not take the page down: keep serving the last generation that parsed, and
-      // report the failure through `/api/__reload` so the mistake is visible instead of silent.
+      // report the failure through `/remote/api/__reload` so the mistake is visible instead of silent.
       hot.error = String(error?.message ?? error)
       hot.mtimeMs = 0
       ctx.logger.warn(`[remote-control] hot routes failed: ${hot.error}`)
@@ -1280,6 +1291,28 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
     const authorized = secretMatches(secret.token, presentedSecret(request))
     const json = (status, body, headers) => sendJson(response, status, body, headers)
 
+    // Everything outside /remote belongs to the DSH web app. Forwarding it here is what makes the desktop
+    // interface usable from a phone; the authorization above is what keeps that from being a public door.
+    if (!url.pathname.startsWith('/remote') && url.pathname !== '/healthz') {
+      if (!authorized) {
+        // Not a bare 401 the reader cannot act on: send them to the page that can ask for a token, and tell it
+        // where to come back to. Without the `next` the reader would land on the plugin page and have to navigate
+        // to the desktop interface a second time.
+        const next = encodeURIComponent(`${url.pathname}${url.search}`)
+        response.writeHead(302, { location: `/remote/?next=${next}`, 'cache-control': 'no-store' })
+        response.end()
+        return
+      }
+      // A first visit that carries the token in the query has to mint the cookie here, or every refresh would
+      // bounce back to the token gate. `authorized` already proved the token, so this cannot hand out a session to
+      // someone who guessed one.
+      if (!cookieOf(request, COOKIE_NAME)) {
+        response.setHeader('set-cookie', `${COOKIE_NAME}=${secret.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`)
+      }
+      await proxy.handle(request, response, url.pathname)
+      return
+    }
+
     if (request.method === 'GET' && !isApiPath(url.pathname) && url.pathname !== '/healthz') {
       // 开发形态：静态 GET 全部交给 Vite dev server（前端热更新），/api/* 仍由宿主回答；
       // 生产形态没有 RC_DEV_ORIGIN，直接读 ui/dist。
@@ -1294,7 +1327,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       json(200, { ok: true, product: 'dsh-remote-control', urls: candidateUrls(settings.bind, boundPort) })
       return
     }
-    if (request.method === 'POST' && url.pathname === '/api/login') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/login') {
       if (!loginAllowed(peer)) {
         json(429, { error: 'too many attempts' })
         return
@@ -1316,7 +1349,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       })
       return
     }
-    if (request.method === 'POST' && url.pathname === '/api/logout') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/logout') {
       json(200, { ok: true }, { 'set-cookie': `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` })
       return
     }
@@ -1330,7 +1363,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/__reload') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/__reload') {
       // Explicit trigger for flows that never issue a normal request (an SSE-only page, a script).
       const module = await loadHot(true)
       json(module === undefined ? 500 : 200, {
@@ -1378,12 +1411,13 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       }
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/diagnose') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/diagnose') {
       // Why a question cannot be answered remotely is nearly always an attachment problem, so the
       // capture counters and the live agent ids are exposed instead of guessing from the UI.
       const agents = ctx.get('agents')
       json(200, {
-        capture: { ...capture, attached: [...capture.attached] },
+        proxy: proxy.status(),
+    capture: { ...capture, attached: [...capture.attached] },
         liveAgents: (agents?.list?.() ?? []).map((agent) => String(agent.id)),
         questions: [...questions.values()].map((record) => ({
           callId: record.callId,
@@ -1396,7 +1430,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/state') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/state') {
       try {
         const [sessions, workspaces] = await Promise.all([sessionsOf(ctx), workspaceTree(ctx)])
         // A Session belongs to the workspace that lists it; cwd is the fallback for older rows.
@@ -1431,7 +1465,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/image') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/image') {
       // Pictures in Session content are a mess of two different things: sometimes a real URL, and very
       // often a path that only *looks* like one — the Harness's own file server answers an unknown path
       // with its SPA shell (200, text/html), so the browser gets no image and no error either.
@@ -1542,7 +1576,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/models') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/models') {
       try {
         const catalog = await ctx.sessionController.modelCatalog()
         json(200, { default: catalog?.default, groups: catalog?.groups ?? [], failures: catalog?.failures ?? [] })
@@ -1552,7 +1586,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/selection') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/selection') {
       const sessionId = url.searchParams.get('sessionId') ?? ''
       const session = ctx.get('sessions')?.get(sessionId)
       const header = session?.requestHeader?.()
@@ -1564,7 +1598,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/select-model') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/select-model') {
       let body
       try {
         body = await readJson(request)
@@ -1590,7 +1624,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/permissions') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/permissions') {
       const presets = ctx.get('permissionPresets')
       if (presets === undefined) {
         json(200, { options: [], defaultPreset: '', current: undefined })
@@ -1611,7 +1645,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/permission') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/permission') {
       let body
       try {
         body = await readJson(request)
@@ -1643,7 +1677,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/older') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/older') {
       // One backward page of history, so a long Session can be read past its opening window.
       const sessionId = url.searchParams.get('sessionId') ?? ''
       const beforeSeq = Number(url.searchParams.get('beforeSeq'))
@@ -1668,7 +1702,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/attachment') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/attachment') {
       // 二进制上传：body 就是图片字节。旧页面仍可用 data URL 走 /api/attach（保留不动，向后兼容）。
       const header = String(request.headers['content-type'] ?? '')
       const mediaType = String(url.searchParams.get('mediaType') ?? header.split(';')[0] ?? '').trim().toLowerCase()
@@ -1702,7 +1736,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/attachment') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/attachment') {
       // Image bytes for the transcript and the composer preview: the page cannot reach the
       // attachment store itself, so the Host reads the one attachment a Session log proves.
       const sessionId = url.searchParams.get('sessionId') ?? ''
@@ -1763,7 +1797,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/attach') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/attach') {
       let body
       try {
         body = await readJson(request, MAX_UPLOAD_BODY)
@@ -1793,7 +1827,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/api/stream') {
+    if (request.method === 'GET' && url.pathname === '/remote/api/stream') {
       const sessionId = url.searchParams.get('sessionId') ?? undefined
       // 满员判断之前先回收僵尸连接：一件写完的、被销毁的、socket 已断的连接还挂在集合里时，新连接
       // 就会吃 503，而客户端按约 3 秒重试 —— 一次回收不及时就放大成重连风暴。
@@ -1834,7 +1868,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/session') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/session') {
       let body
       try {
         body = await readJson(request)
@@ -1857,7 +1891,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/send') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/send') {
       let body
       try {
         // Prompts carry image bytes inline, so this route shares the upload-sized cap.
@@ -1892,7 +1926,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/cancel') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/cancel') {
       let body
       try {
         body = await readJson(request)
@@ -1914,7 +1948,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/answer') {
+    if (request.method === 'POST' && url.pathname === '/remote/api/answer') {
       let body
       try {
         body = await readJson(request)
@@ -1969,6 +2003,56 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
     return userQuestions.answer(record.agent, record.callId, { answers })
   }
 
+  /**
+   * @returns the upstream base URL for the DSH web app, without any query string.
+   *
+   * The advertised URL is the one printed for the reader, so it carries the launch token; the token is stripped
+   * here because it only belongs on the cookie-exchange request, not on every proxied call.
+   */
+  function upstreamBase () {
+    const webApp = ctx.get('webApp')
+    const advertised = webApp?.getAdvertisedUrl?.()
+    if (typeof advertised !== 'string' || advertised === '') return undefined
+    try {
+      const parsed = new URL(advertised)
+      return `${parsed.protocol}//${parsed.host}`
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * @returns the advertised URL with the launch token attached, for the cookie exchange.
+   *
+   * `getAdvertisedUrl()` returns only an origin, which is not enough: the cookie exchange needs the process's launch
+   * token, and that token is not part of any documented service contract. Rather than assume a name, this probes the
+   * objects that carry it — the web app itself first, then the connection — and takes the first string that comes
+   * back. A profile that exposes none of them simply cannot proxy, and the caller reports that instead of failing
+   * silently.
+   */
+  function upstreamAuthenticated () {
+    const advertised = upstreamBase()
+    if (advertised === undefined) return ''
+    for (const service of ['webApp', 'connection']) {
+      const instance = ctx.get(service)
+      const produce = instance?.authenticatedUrl
+      if (typeof produce !== 'function') continue
+      try {
+        const value = produce.call(instance, advertised)
+        if (typeof value === 'string' && value !== '') return value
+      } catch {
+        /* try the next carrier */
+      }
+    }
+    return ''
+  }
+
+  const proxy = createDshProxy({
+    baseUrl: upstreamBase,
+    authenticatedUrl: upstreamAuthenticated,
+    logger: ctx.logger,
+  })
+
   const server = createServer((request, response) => {
     void handle(request, response).catch((error) => {
       try {
@@ -1981,6 +2065,23 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
   /** The port actually bound, filled in once `listen` reports it. */
   let boundPort = settings.port
 
+  server.on('upgrade', (request, socket, head) => {
+    // The upgrade path has no response to answer with, so authorization is decided before anything is forwarded.
+    let target
+    try {
+      target = new URL(request.url ?? '/', 'http://placeholder')
+    } catch {
+      socket.destroy()
+      return
+    }
+    const presented = presentedSecret(request)
+    if (target.pathname.startsWith('/remote') || !secretMatches(secret.token, presented)) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n')
+      return
+    }
+    void proxy.handleUpgrade(request, socket, head)
+  })
+
   ctx.effect(() => {
     server.on('error', (error) => {
       ctx.logger?.warn?.(`remote-control: listener failed: ${String(error?.message ?? error)}`)
@@ -1989,7 +2090,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
       const address = server.address()
       boundPort = typeof address === 'object' && address !== null ? address.port : settings.port
       const urls = candidateUrls(settings.bind, boundPort)
-      const hint = urls.map((url) => `${url}/?k=${secret.token}`).join('\n  ')
+      const hint = urls.map((url) => `${url}/remote/?k=${secret.token}`).join('\n  ')
       ctx.logger?.info?.([
         `remote-control: listening on ${settings.bind}:${String(boundPort)}`,
         `  open once (the token becomes a cookie, then the URL is clean):\n  ${hint}`,

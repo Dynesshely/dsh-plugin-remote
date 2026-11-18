@@ -429,7 +429,7 @@ function controlPort () {
 /** Load the Host facts shown in the About section. */
 async function loadInfo () {
   try {
-    info.value = await api('/api/dsh/info')
+    info.value = await api('/remote/api/dsh/info')
   } catch (error) {
     info.value = { error: String(error.message ?? error) }
   }
@@ -456,7 +456,7 @@ async function controlDsh (mode) {
   armed.value = ''
   dshBusy.value = mode
   try {
-    await api(`/api/dsh/${mode}`, { method: 'POST', body: { port: controlPort() } })
+    await api(`/remote/api/dsh/${mode}`, { method: 'POST', body: { port: controlPort() } })
     state.actionError = mode === 'restart'
       ? t('sidebar.restarting')
       : t('sidebar.exiting')
@@ -703,6 +703,16 @@ function entriesFor (session) {
       <div v-if="dshOpen" class="fixed inset-0 z-[124]" @click="dshOpen = false" />
       <div v-if="dshOpen" class="card pop fixed top-3 left-3 z-[125] w-64 overflow-hidden p-1.5">
         <p class="px-2.5 pt-1.5 pb-2 text-[11px] font-medium tracking-wide text-tertiary">DSH</p>
+        <!-- Same origin, so this navigates straight into the proxied desktop interface with the cookie this page
+             already holds; no token has to be passed again. -->
+        <a
+          href="/"
+          class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] no-underline transition-colors hover:bg-fill-chip"
+          @click="dshOpen = false"
+        >
+          <AppIcon name="layers" :size="14" class="opacity-70" />
+          <span class="flex-1">{{ t('sidebar.openDesktop') }}</span>
+        </a>
         <button
           type="button"
           class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-fill-tint-hover"

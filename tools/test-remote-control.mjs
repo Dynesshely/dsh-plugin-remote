@@ -307,7 +307,7 @@ const distIndex = new URL('../ui/dist/index.html', import.meta.url)
 const hasDist = existsSync(distIndex)
 
 await check('serves the shell with a strict CSP and no auth', async () => {
-  const response = await fetch(`${base}/`)
+  const response = await fetch(`${base}/remote/`)
   assert.equal(response.status, 200)
   const csp = response.headers.get('content-security-policy') ?? ''
   assert.match(csp, /default-src 'none'/u)
@@ -322,17 +322,17 @@ await check('serves built SPA assets with the right content type', async () => {
     console.log('       (skipped: ui/dist is not built)')
     return
   }
-  const index = await (await fetch(`${base}/`)).text()
-  const match = /\.\/assets\/([^"']+\.js)/u.exec(index)
+  const index = await (await fetch(`${base}/remote/`)).text()
+  const match = /(?:\/remote)?\/assets\/([^"']+\.js)/u.exec(index)
   assert.ok(match !== null, 'the shell references a bundled script')
-  const asset = await fetch(`${base}/assets/${match[1]}`)
+  const asset = await fetch(`${base}/remote/assets/${match[1]}`)
   assert.equal(asset.status, 200)
   assert.match(asset.headers.get('content-type') ?? '', /javascript/u)
   assert.match(asset.headers.get('cache-control') ?? '', /immutable/u)
 })
 
 await check('a deep link falls back to the SPA shell', async () => {
-  const response = await fetch(`${base}/some/deep/link`)
+  const response = await fetch(`${base}/remote/some/deep/link`)
   assert.equal(response.status, 200)
   assert.match(response.headers.get('content-type') ?? '', /text\/html/u)
 })
@@ -344,18 +344,18 @@ await check('healthz reports ok without auth', async () => {
 })
 
 await check('the API refuses unauthenticated access', async () => {
-  const response = await fetch(`${base}/api/state`)
+  const response = await fetch(`${base}/remote/api/state`)
   assert.equal(response.status, 401)
 })
 
 await check('a wrong token is refused and the right one becomes a cookie', async () => {
-  const bad = await fetch(`${base}/api/login`, {
+  const bad = await fetch(`${base}/remote/api/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ token: 'wrong-token-wrong-token' }),
   })
   assert.equal(bad.status, 401)
-  const good = await fetch(`${base}/api/login`, {
+  const good = await fetch(`${base}/remote/api/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ token: TOKEN }),
@@ -368,7 +368,7 @@ await check('a wrong token is refused and the right one becomes a cookie', async
 })
 
 await check('state maps the Session catalog and groups it by workspace', async () => {
-  const response = await fetch(`${base}/api/state`, { headers: cookie })
+  const response = await fetch(`${base}/remote/api/state`, { headers: cookie })
   assert.equal(response.status, 200)
   const payload = await response.json()
   assert.deepEqual(payload.workspaces, [{ id: 'w1', title: 'Work', path: 'C:\\work', sessionIds: ['s1'] }])
@@ -381,16 +381,16 @@ await check('state maps the Session catalog and groups it by workspace', async (
 })
 
 await check('models and the current selection are exposed', async () => {
-  const models = await (await fetch(`${base}/api/models`, { headers: cookie })).json()
+  const models = await (await fetch(`${base}/remote/api/models`, { headers: cookie })).json()
   assert.equal(models.groups[0].models[0].name, 'Test Model')
-  const selection = await (await fetch(`${base}/api/selection?sessionId=s1`, { headers: cookie })).json()
+  const selection = await (await fetch(`${base}/remote/api/selection?sessionId=s1`, { headers: cookie })).json()
   assert.deepEqual(selection.selected, { provider: 'pi', model: 'test-model' })
-  const empty = await (await fetch(`${base}/api/selection?sessionId=cold`, { headers: cookie })).json()
+  const empty = await (await fetch(`${base}/remote/api/selection?sessionId=cold`, { headers: cookie })).json()
   assert.equal(empty.selected, null)
 })
 
 await check('switching the model reaches the controller', async () => {
-  const response = await fetch(`${base}/api/select-model`, {
+  const response = await fetch(`${base}/remote/api/select-model`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', provider: 'pi', model: 'other' }),
@@ -400,10 +400,10 @@ await check('switching the model reaches the controller', async () => {
 })
 
 await check('permission presets are listed and switchable', async () => {
-  const catalog = await (await fetch(`${base}/api/permissions?sessionId=s1`, { headers: cookie })).json()
+  const catalog = await (await fetch(`${base}/remote/api/permissions?sessionId=s1`, { headers: cookie })).json()
   assert.equal(catalog.options.length, 2)
   assert.equal(catalog.current, 'workspace-write')
-  const response = await fetch(`${base}/api/permission`, {
+  const response = await fetch(`${base}/remote/api/permission`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', name: 'read-only' }),
@@ -413,7 +413,7 @@ await check('permission presets are listed and switchable', async () => {
 })
 
 await check('an image is staged into the attachment store', async () => {
-  const response = await fetch(`${base}/api/attach`, {
+  const response = await fetch(`${base}/remote/api/attach`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ dataUrl: PIXEL, name: 'pixel.png' }),
@@ -427,7 +427,7 @@ await check('an image is staged into the attachment store', async () => {
 })
 
 await check('an attachment is read back for the transcript preview', async () => {
-  const response = await fetch(`${base}/api/attachment?sessionId=s1&attachmentId=att-0`, { headers: cookie })
+  const response = await fetch(`${base}/remote/api/attachment?sessionId=s1&attachmentId=att-0`, { headers: cookie })
   assert.equal(response.status, 200)
   const payload = await response.json()
   assert.equal(payload.mediaType, 'image/png')
@@ -435,15 +435,15 @@ await check('an attachment is read back for the transcript preview', async () =>
   // The route hands the gateway one durable reference; that is the shape its `attachment()` reads.
   assert.deepEqual(host.calls.attachments, [{ attachment: { attachmentId: 'att-0' } }])
 
-  const missing = await fetch(`${base}/api/attachment?sessionId=s1&attachmentId=missing`, { headers: cookie })
+  const missing = await fetch(`${base}/remote/api/attachment?sessionId=s1&attachmentId=missing`, { headers: cookie })
   assert.equal(missing.status, 404)
 
-  const incomplete = await fetch(`${base}/api/attachment?sessionId=s1`, { headers: cookie })
+  const incomplete = await fetch(`${base}/remote/api/attachment?sessionId=s1`, { headers: cookie })
   assert.equal(incomplete.status, 400)
 })
 
 await check('a rejected attachment payload never reaches the store', async () => {
-  const response = await fetch(`${base}/api/attach`, {
+  const response = await fetch(`${base}/remote/api/attach`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ dataUrl: 'data:text/plain;base64,aGk=' }),
@@ -458,7 +458,7 @@ await check('a screenshot-sized attachment payload is accepted', async () => {
   const base64 = PIXEL.slice(PIXEL.indexOf(',') + 1)
   // A valid, padding-free base64 body of the size a pasted screenshot produces (~300 KB decoded).
   const payload = `data:image/png;base64,${'A'.repeat(400_000)}`
-  const response = await fetch(`${base}/api/attach`, {
+  const response = await fetch(`${base}/remote/api/attach`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ dataUrl: payload, name: 'screenshot.png' }),
@@ -469,7 +469,7 @@ await check('a screenshot-sized attachment payload is accepted', async () => {
 })
 
 await check('a route outside the upload paths keeps the small body cap', async () => {
-  const response = await fetch(`${base}/api/answer`, {
+  const response = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'x', answers: [{ id: 'x'.repeat(100_000) }] }),
@@ -478,7 +478,7 @@ await check('a route outside the upload paths keeps the small body cap', async (
 })
 
 await check('send forwards an inline image exactly like the Desktop composer', async () => {
-  const response = await fetch(`${base}/api/send`, {
+  const response = await fetch(`${base}/remote/api/send`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -503,7 +503,7 @@ await check('send forwards an inline image exactly like the Desktop composer', a
 })
 
 await check('a prompt carrying a screenshot-sized image is accepted', async () => {
-  const response = await fetch(`${base}/api/send`, {
+  const response = await fetch(`${base}/remote/api/send`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -521,7 +521,7 @@ await check('a prompt carrying a screenshot-sized image is accepted', async () =
 })
 
 await check('an attachment-style image part still passes through', async () => {
-  const response = await fetch(`${base}/api/send`, {
+  const response = await fetch(`${base}/remote/api/send`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -536,7 +536,7 @@ await check('an attachment-style image part still passes through', async () => {
 })
 
 await check('the legacy text body still works', async () => {
-  const response = await fetch(`${base}/api/send`, {
+  const response = await fetch(`${base}/remote/api/send`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', text: 'plain body' }),
@@ -547,7 +547,7 @@ await check('the legacy text body still works', async () => {
 
 await check('send rejects an empty message', async () => {
   const before = host.calls.prompt.length
-  const response = await fetch(`${base}/api/send`, {
+  const response = await fetch(`${base}/remote/api/send`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', content: [{ type: 'text', text: '   ' }] }),
@@ -557,7 +557,7 @@ await check('send rejects an empty message', async () => {
 })
 
 await check('cancel asks the controller to stop the turn', async () => {
-  const response = await fetch(`${base}/api/cancel`, {
+  const response = await fetch(`${base}/remote/api/cancel`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1' }),
@@ -568,7 +568,7 @@ await check('cancel asks the controller to stop the turn', async () => {
 
 await check('the SSE feed forwards the opening snapshot and later frames', async () => {
   const controller = new AbortController()
-  const response = await fetch(`${base}/api/stream?sessionId=s1`, { headers: cookie, signal: controller.signal })
+  const response = await fetch(`${base}/remote/api/stream?sessionId=s1`, { headers: cookie, signal: controller.signal })
   assert.equal(response.status, 200)
   assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/u)
   const reader = response.body.getReader()
@@ -595,7 +595,7 @@ await check('the SSE feed forwards the opening snapshot and later frames', async
 })
 
 await check('older history pages backwards from the loaded window', async () => {
-  const response = await fetch(`${base}/api/older?sessionId=s1&beforeSeq=120`, { headers: cookie })
+  const response = await fetch(`${base}/remote/api/older?sessionId=s1&beforeSeq=120`, { headers: cookie })
   const body = await response.text()
   assert.equal(response.status, 200, body)
   const payload = JSON.parse(body)
@@ -608,7 +608,7 @@ await check('older history pages backwards from the loaded window', async () => 
   assert.equal(request.throughSeq, 120)
   assert.equal(request.maxMessages, 200)
 
-  const bad = await fetch(`${base}/api/older?sessionId=s1`, { headers: cookie })
+  const bad = await fetch(`${base}/remote/api/older?sessionId=s1`, { headers: cookie })
   assert.equal(bad.status, 400)
 })
 
@@ -623,7 +623,7 @@ await check('a question tool call is captured from the session log feed', async 
       arguments: JSON.stringify({ questions: [{ id: 'pick', header: '选一个', question: '哪个？', options: [{ label: 'A（Recommended）' }, { label: 'B' }] }] }),
     },
   })
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   const record = state.pending.questions.find((question) => question.callId === 'call-8')
   assert.notEqual(record, undefined, 'captured from the log without any waterfall')
   assert.equal(record.sessionId, 's1')
@@ -634,14 +634,14 @@ await check('a question tool call is captured from the session log feed', async 
   // A question captured only from the log has no live waterfall, so answering it goes through the
   // Host service — which accepts it once it has continued (timed mode).
   host.markContinued('call-8')
-  const answered = await fetch(`${base}/api/answer`, {
+  const answered = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-8', answers: [{ id: 'pick', selected: ['A（Recommended）'] }] }),
   })
   assert.equal(answered.status, 200, await answered.clone().text())
   assert.equal(host.calls.answer.at(-1).agentId, 's1')
-  assert.equal((await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()).capture.sessionCalls >= 1, true)
+  assert.equal((await (await fetch(`${base}/remote/api/diagnose`, { headers: cookie })).json()).capture.sessionCalls >= 1, true)
 
   // A question answered elsewhere (or timed out) leaves the pending list when its result lands.
   host.emit('session/event', { id: 's1' }, {
@@ -649,13 +649,13 @@ await check('a question tool call is captured from the session log feed', async 
     seq: 44,
     data: { callId: 'call-7', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'x', question: 'q', options: [] }] }) },
   })
-  let after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  let after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.some((question) => question.callId === 'call-7'), true)
   host.emit('session/event', { id: 's1' }, { type: 'tool/result', seq: 45, data: { message: { toolCallId: 'call-7', content: [] } } })
-  after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.some((question) => question.callId === 'call-7'), false, 'a settled tool call leaves the pending list')
 
-  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  const diagnose = await (await fetch(`${base}/remote/api/diagnose`, { headers: cookie })).json()
   assert.equal(diagnose.capture.sessionCalls, 2)
 })
 
@@ -669,17 +669,17 @@ await check('a question is captured even though the desktop answerer vetoes the 
   })
   assert.equal(outcome, host.DESKTOP_ANSWER, 'the desktop answerer still owns the decision')
 
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   const record = state.pending.questions.find((question) => question.callId === 'call-3')
   assert.equal(record !== undefined, true, 'the question was captured before the veto')
   assert.equal(record.sessionId, 's1')
 
-  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  const diagnose = await (await fetch(`${base}/remote/api/diagnose`, { headers: cookie })).json()
   assert.equal(diagnose.questions.some((question) => question.callId === 'call-3'), true)
 
   // The desktop answered, so it won the race: a later remote answer is refused instead of pretending
   // to be accepted.
-  const late = await fetch(`${base}/api/answer`, {
+  const late = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-3', answers: [{ id: 'q3', selected: ['B'] }] }),
@@ -689,7 +689,7 @@ await check('a question is captured even though the desktop answerer vetoes the 
 
   // Its result retires the record, which is what happens live moments later.
   host.emit('session/event', { id: 's1' }, { type: 'tool/result', seq: 46, data: { message: { toolCallId: 'call-3', content: [] } } })
-  const cleared = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const cleared = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(cleared.pending.questions.some((question) => question.callId === 'call-3'), false)
 })
 
@@ -708,14 +708,14 @@ await check('a question from an already-running agent is captured and answerable
   assert.equal(outcome, 'local-answer', 'the desktop answerer keeps the decision by default')
   assert.equal(passedThrough, true)
 
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(state.pending.questions.length, 1, `pending: ${state.pending.questions.map((question) => question.callId).join(',')}`)
   assert.deepEqual(state.pending.questions[0].questions[0].options, [{ label: 'A' }, { label: 'B' }])
 
   // This listener was reached directly, so no waterfall is being raced here: the Host service is the
   // route, which accepts the question once it has continued.
   host.markContinued('call-1')
-  const answered = await fetch(`${base}/api/answer`, {
+  const answered = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-1', answers: [{ id: 'q1', selected: ['B'] }] }),
@@ -725,7 +725,7 @@ await check('a question from an already-running agent is captured and answerable
   assert.equal(host.calls.answer.at(-1).agentId, 's1')
   assert.deepEqual(host.calls.answer.at(-1).answer, { answers: [{ id: 'q1', selected: ['B'] }] })
 
-  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.length, 0, 'the answered question left the pending list')
 })
 
@@ -740,18 +740,18 @@ await check('the root listener is a safety net for unannounced agents', async ()
     wait: { callId: 'call-2', timed: true },
   }, () => Promise.resolve('local-answer'))
   assert.equal(outcome, 'local-answer')
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   const record = state.pending.questions.find((question) => question.callId === 'call-2')
   assert.equal(record?.sessionId, 's9', 'the request’s own agent identified the Session')
   assert.equal(record?.answerable, true)
 
-  const diagnose = await (await fetch(`${base}/api/diagnose`, { headers: cookie })).json()
+  const diagnose = await (await fetch(`${base}/remote/api/diagnose`, { headers: cookie })).json()
   assert.deepEqual(diagnose.capture.attached, ['s1'])
   assert.equal(diagnose.capture.rootQuestions > 0, true)
   assert.equal(diagnose.questions.some((question) => question.callId === 'call-2'), true)
   assert.equal(diagnose.liveAgents.includes('s1'), true)
 
-  await fetch(`${base}/api/answer`, {
+  await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-2', answers: [{ id: 'q2', selected: ['Yes'] }] }),
@@ -769,12 +769,12 @@ await check('a question the desktop is still waiting on is answerable from the r
     wait: { callId: 'call-race' },
   })
 
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   const record = state.pending.questions.find((question) => question.callId === 'call-race')
   assert.notEqual(record, undefined, 'the question is displayed while the waterfall waits')
   assert.equal(record.answerable, true, 'the racing waterfall makes it answerable')
 
-  const answered = await fetch(`${base}/api/answer`, {
+  const answered = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-race', answers: [{ id: 'pick', selected: ['远程'] }] }),
@@ -785,7 +785,7 @@ await check('a question the desktop is still waiting on is answerable from the r
 
   // The answer travels back through the waterfall the tool is awaiting.
   assert.deepEqual(await waiting, { answers: [{ id: 'pick', selected: ['远程'] }] })
-  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.some((question) => question.callId === 'call-race'), false)
   host.replaceBridge('user-questions/request', () => Promise.resolve(host.DESKTOP_ANSWER))
 })
@@ -804,12 +804,12 @@ await check('a waiting waterfall that carries no call id is matched to the log r
     questions: [{ id: 'sig', question: '签名匹配', options: [{ label: 'A' }] }],
   })
 
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   const record = state.pending.questions.find((question) => question.callId === 'call-sig')
   assert.notEqual(record, undefined)
   assert.equal(record.answerable, true, 'the waiting waterfall bound itself to the logged call id')
 
-  const answered = await fetch(`${base}/api/answer`, {
+  const answered = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-sig', answers: [{ id: 'sig', selected: ['A'] }] }),
@@ -827,7 +827,7 @@ await check('a continued question is answered through the Host service', async (
     data: { callId: 'call-svc', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'late', question: '超时后答', options: [{ label: 'A' }] }] }) },
   })
   host.markContinued('call-svc')
-  const answered = await fetch(`${base}/api/answer`, {
+  const answered = await fetch(`${base}/remote/api/answer`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ callId: 'call-svc', answers: [{ id: 'late', selected: ['A'] }] }),
@@ -836,7 +836,7 @@ await check('a continued question is answered through the Host service', async (
   assert.equal(answered.status, 200, body)
   assert.equal(JSON.parse(body).ok, true)
   assert.equal(host.calls.answer.at(-1).callId, 'call-svc')
-  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(after.pending.questions.some((question) => question.callId === 'call-svc'), false)
 })
 
@@ -851,7 +851,7 @@ await check('an approval is surfaced and retires when the desktop decides', asyn
     return new Promise((resolve) => { decide = resolve })
   })
   await pause(30)
-  const waiting = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const waiting = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(waiting.pending.approvals.length, 1, 'a pending approval is surfaced')
   assert.equal(waiting.pending.approvals[0].toolName, 'bash')
   assert.equal(passedThrough, true, 'the desktop chain still owns the decision')
@@ -859,7 +859,7 @@ await check('an approval is surfaced and retires when the desktop decides', asyn
   decide('allowed-once')
   assert.equal(await pending, 'allowed-once')
   await pause(30)
-  const settled = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const settled = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(settled.pending.approvals.length, 0, 'the card goes away as soon as it is decided')
 })
 
@@ -868,7 +868,7 @@ await check('an approval also retires when its tool starts running', async () =>
   // Never settles: the decision came from somewhere this plugin cannot see.
   void listener({ toolName: 'write', reason: 'outside the workspace' }, () => new Promise(() => {}))
   await pause(20)
-  const before = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const before = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(before.pending.approvals.some((approval) => approval.toolName === 'write'), true)
 
   // A tool starting to run is proof the approval was granted.
@@ -878,7 +878,7 @@ await check('an approval also retires when its tool starts running', async () =>
     data: { callId: 'call-approved', name: 'write', arguments: '{}' },
   })
   await pause(20)
-  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.equal(
     after.pending.approvals.some((approval) => approval.toolName === 'write'),
     false,
@@ -888,7 +888,7 @@ await check('an approval also retires when its tool starts running', async () =>
 
 await check('session management reaches the same Remotes the desktop uses', async () => {
   const call = async (path, body) => {
-    const response = await fetch(`${base}/api/session/${path}`, {
+    const response = await fetch(`${base}/remote/api/session/${path}`, {
       method: 'POST',
       headers: { ...cookie, 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -900,7 +900,7 @@ await check('session management reaches the same Remotes the desktop uses', asyn
 
   // pin / unpin: the reply carries the complete set, which is what both ends mirror.
   assert.deepEqual((await call('pin', { sessionId: 's2' })).pinnedSessionIds, ['s2'])
-  let state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  let state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.deepEqual(state.pinnedSessionIds, ['s2'], 'the state payload carries the pins')
   assert.equal(state.managed, true, 'the workspace mirror reports itself live')
   assert.deepEqual((await call('pin', { sessionId: 's2', pinned: false })).pinnedSessionIds, [])
@@ -912,7 +912,7 @@ await check('session management reaches the same Remotes the desktop uses', asyn
   assert.deepEqual(host.calls.fork.at(-1), { sessionId: 's1' })
 
   // Validation refuses what the Host would refuse anyway.
-  const empty = await fetch(`${base}/api/session/rename`, {
+  const empty = await fetch(`${base}/remote/api/session/rename`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 's1', title: '   ' }),
@@ -925,7 +925,7 @@ await check('session management reaches the same Remotes the desktop uses', asyn
   assert.deepEqual(archived.archivedSessionIds, ['s3'])
   assert.deepEqual(archived.pinnedSessionIds, [], 'archiving unpins the Session')
   assert.deepEqual(host.calls.archive.at(-1), { sessionId: 's3', stopActivity: false })
-  state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.deepEqual(state.archivedSessionIds, ['s3'])
   assert.deepEqual((await call('archive', { sessionId: 's3', archived: false })).archivedSessionIds, [])
 })
@@ -934,17 +934,17 @@ await check('a pin made on the desktop arrives through the follow stream', async
   // The bi-directional half: the desktop pins, this plugin mirrors the pushed set, the page re-reads it.
   host.pushWorkspaceFrame({ type: 'pinned', pinnedSessionIds: ['s1', 's2'] })
   await new Promise((resolve) => { setTimeout(resolve, 50) })
-  const state = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const state = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.deepEqual(state.pinnedSessionIds, ['s1', 's2'], 'the desktop-side pin is mirrored')
 
   host.pushWorkspaceFrame({ type: 'archived', archivedSessionIds: ['s2'] })
   await new Promise((resolve) => { setTimeout(resolve, 50) })
-  const after = await (await fetch(`${base}/api/state`, { headers: cookie })).json()
+  const after = await (await fetch(`${base}/remote/api/state`, { headers: cookie })).json()
   assert.deepEqual(after.archivedSessionIds, ['s2'], 'and so is an archive made there')
 })
 
 await check('host routes reload from host/hot.js without a DSH restart', async () => {
-  const response = await fetch(`${base}/api/__reload`, { method: 'POST', headers: cookie })
+  const response = await fetch(`${base}/remote/api/__reload`, { method: 'POST', headers: cookie })
   const payload = await response.json()
   assert.equal(response.status, 200, JSON.stringify(payload))
   assert.equal(payload.ok, true)
@@ -953,12 +953,12 @@ await check('host routes reload from host/hot.js without a DSH restart', async (
 
 await check('a workspace can start a Session with a chosen mode', async () => {
   // The desktop's "模式" list is the agent-preset registry.
-  const presets = await (await fetch(`${base}/api/presets`, { headers: cookie })).json()
+  const presets = await (await fetch(`${base}/remote/api/presets`, { headers: cookie })).json()
   assert.deepEqual(presets.presets.map((preset) => preset.id), ['standard', 'ptc'], 'ordered by the registry order')
   assert.equal(presets.presets[0].name, '标准模式', 'the page shows the picker wording, not the raw id')
   assert.ok(String(presets.presets[0].description).startsWith('处理代码、文件和资料'), 'and its description')
 
-  const response = await fetch(`${base}/api/session/create`, {
+  const response = await fetch(`${base}/remote/api/session/create`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ workspaceId: 'w1', agentPreset: 'ptc' }),
@@ -970,14 +970,14 @@ await check('a workspace can start a Session with a chosen mode', async () => {
   assert.deepEqual(host.calls.create.at(-1), { workspaceId: 'w1', agentPreset: 'ptc' })
 
   // cwd is accepted instead of a workspace id, which is what an ungrouped row needs.
-  await fetch(`${base}/api/session/create`, {
+  await fetch(`${base}/remote/api/session/create`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ cwd: 'C:\\work\\alpha', agentPreset: 'standard' }),
   })
   assert.deepEqual(host.calls.create.at(-1), { cwd: 'C:\\work\\alpha', agentPreset: 'standard' })
 
-  const invalid = await fetch(`${base}/api/session/create`, {
+  const invalid = await fetch(`${base}/remote/api/session/create`, {
     method: 'POST',
     headers: { ...cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ agentPreset: 'standard' }),
@@ -988,7 +988,7 @@ await check('a workspace can start a Session with a chosen mode', async () => {
 await check('repeated bad logins are rate limited', async () => {
   let limited = false
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const response = await fetch(`${base}/api/login`, {
+    const response = await fetch(`${base}/remote/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token: `bad-token-${String(attempt)}-xxxxxxxx` }),
@@ -1001,7 +1001,7 @@ await check('repeated bad logins are rate limited', async () => {
 await check('the startup log carries a usable ?k= URL', async () => {
   const joined = host.logs.join('\n')
   assert.match(joined, /listening on 127\.0\.0\.1:\d+/u)
-  assert.match(joined, /http:\/\/127\.0\.0\.1:\d+\/\?k=/u)
+  assert.match(joined, /http:\/\/127\.0\.0\.1:\d+\/remote\/\?k=/u)
   assert.match(joined, /token source: plugin config/u)
   assert.match(joined, /loopback only/u)
 })
@@ -1012,7 +1012,7 @@ await check('without a configured token the plugin mints and persists one', asyn
   let url
   for (let i = 0; i < 100 && url === undefined; i += 1) {
     const line = second.logs.find((entry) => entry.includes('http://127.0.0.1:'))
-    if (line !== undefined) url = /http:\/\/127\.0\.0\.1:\d+\/\?k=([A-Za-z0-9_-]+)/u.exec(line)?.[0]
+    if (line !== undefined) url = /http:\/\/127\.0\.0\.1:\d+\/remote\/\?k=([A-Za-z0-9_-]+)/u.exec(line)?.[0]
     else await sleep(20)
   }
   assert.ok(url !== undefined, 'expected a generated token URL')
@@ -1022,7 +1022,7 @@ await check('without a configured token the plugin mints and persists one', asyn
   assert.equal(stored.token, generated, 'the persisted token is the one handed out')
   assert.match(second.logs.join('\n'), /token file: .*auth\.json \(newly generated\)/u)
   const port = /:(\d+)\//u.exec(url)[1]
-  const response = await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { authorization: `Bearer ${generated}` } })
+  const response = await fetch(`http://127.0.0.1:${port}/remote/api/state`, { headers: { authorization: `Bearer ${generated}` } })
   assert.equal(response.status, 200)
   for (const dispose of second.effects.reverse()) {
     if (typeof dispose === 'function') await dispose()

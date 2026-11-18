@@ -737,7 +737,7 @@ export function ensureAttachmentImage (sessionId, attachmentId, meta) {
     const value = meta?.[field]
     if (value !== undefined && value !== null && value !== '') ref.set(field, String(value))
   }
-  api(`/api/attachment?${ref.toString()}`)
+  api(`/remote/api/attachment?${ref.toString()}`)
     .then((payload) => {
       attachmentImages.set(key, payload.data === '' ? '' : `data:${payload.mediaType};base64,${payload.data}`)
     })
@@ -843,7 +843,7 @@ function trackFinishedSessions () {
 
 export async function loadState (signal) {
   try {
-    const payload = await api('/api/state', { signal })
+    const payload = await api('/remote/api/state', { signal })
     state.bind = payload.bind ?? ''
     // Replacing the array re-renders the whole sidebar, and the Host's status broadcasts fire this
     // loader repeatedly. When nothing the sidebar draws from has changed, the array is left alone.
@@ -891,7 +891,7 @@ export async function loadState (signal) {
 /** Load the model catalog once. */
 export async function loadModels () {
   try {
-    const payload = await api('/api/models')
+    const payload = await api('/remote/api/models')
     state.models = { groups: payload.groups ?? [], defaultSelection: payload.default }
   } catch {
     /* the catalog is optional */
@@ -905,7 +905,7 @@ export async function loadModels () {
  */
 export async function loadPermissions (sessionId, signal) {
   try {
-    const payload = await api(`/api/permissions?sessionId=${encodeURIComponent(sessionId ?? '')}`, { signal })
+    const payload = await api(`/remote/api/permissions?sessionId=${encodeURIComponent(sessionId ?? '')}`, { signal })
     state.permissions = {
       options: payload.options ?? [],
       defaultPreset: payload.defaultPreset ?? '',
@@ -929,7 +929,7 @@ let refreshOnResume = false
  * Re-read the catalog soon, coalescing bursts.
  *
  * The status broadcast carries no workspace membership, so the grouped sidebar is re-listed from
- * `/api/state` shortly after it fires.
+ * `/remote/api/state` shortly after it fires.
  */
 function refreshSoon () {
   if (refreshTimer !== undefined) return
@@ -1216,7 +1216,7 @@ export async function loadOlder () {
     if (state.loadingOlder) state.olderSlow = true
   })
   try {
-    const payload = await api(`/api/older?sessionId=${encodeURIComponent(sessionId)}&beforeSeq=${String(first.seq)}`, {
+    const payload = await api(`/remote/api/older?sessionId=${encodeURIComponent(sessionId)}&beforeSeq=${String(first.seq)}`, {
       signal: controller.signal,
       timeoutMs: 30_000,
     })
@@ -1280,7 +1280,7 @@ export function setLightweight (value) {
  */
 async function refreshSelection (signal) {
   try {
-    const payload = await api(`/api/selection?sessionId=${encodeURIComponent(state.selected ?? '')}`, { signal })
+    const payload = await api(`/remote/api/selection?sessionId=${encodeURIComponent(state.selected ?? '')}`, { signal })
     state.selection = payload.selected
   } catch {
     state.selection = undefined
@@ -1998,7 +1998,7 @@ export async function sendPrompt (content, mode = 'queue', options = {}) {
     ? controller.signal
     : AbortSignal.any([controller.signal, options.signal])
   try {
-    await api('/api/send', {
+    await api('/remote/api/send', {
       method: 'POST',
       body: { sessionId: state.selected, content, mode },
       signal,
@@ -2038,7 +2038,7 @@ export function cancelSend () {
 /** Stop the running turn. */
 export async function cancelTurn () {
   try {
-    await api('/api/cancel', { method: 'POST', body: { sessionId: state.selected } })
+    await api('/remote/api/cancel', { method: 'POST', body: { sessionId: state.selected } })
   } catch (error) {
     state.actionError = String(error.message ?? error)
   }
@@ -2052,7 +2052,7 @@ export async function cancelTurn () {
  */
 export async function answerQuestion (callId, answers) {
   try {
-    await api('/api/answer', { method: 'POST', body: { callId, answers } })
+    await api('/remote/api/answer', { method: 'POST', body: { callId, answers } })
     state.pending.questions = state.pending.questions.filter((question) => question.callId !== callId)
     return true
   } catch (error) {
@@ -2064,7 +2064,7 @@ export async function answerQuestion (callId, answers) {
 /** Switch the Session's model. */
 export async function selectModel (selection) {
   try {
-    await api('/api/select-model', { method: 'POST', body: { sessionId: state.selected, ...selection } })
+    await api('/remote/api/select-model', { method: 'POST', body: { sessionId: state.selected, ...selection } })
     state.selection = selection
     state.actionError = ''
   } catch (error) {
@@ -2075,7 +2075,7 @@ export async function selectModel (selection) {
 /** Switch the Session's permission preset. */
 export async function selectPermission (name) {
   try {
-    await api('/api/permission', { method: 'POST', body: { sessionId: state.selected, name } })
+    await api('/remote/api/permission', { method: 'POST', body: { sessionId: state.selected, name } })
     state.permissions.current = name
     state.actionError = ''
   } catch (error) {
@@ -2087,7 +2087,7 @@ export async function selectPermission (name) {
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
 /**
- * 图片硬上限：与宿主 `/api/attachment` 的 MAX_UPLOAD_BODY（16MB）保持一致。
+ * 图片硬上限：与宿主 `/remote/api/attachment` 的 MAX_UPLOAD_BODY（16MB）保持一致。
  * 超过就直接拒绝，连读都不读 —— 先读进内存再报错，正是"卡死"的开始。
  */
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024
@@ -2213,7 +2213,7 @@ function sameStringArray (left, right) {
 
 /**
  * Install the pinned/archived sets a state or `sessions` payload carries.
- * @param payload - a `/api/state` reply or a `sessions` SSE payload.
+ * @param payload - a `/remote/api/state` reply or a `sessions` SSE payload.
  */
 function installManagement (payload) {
   if (payload === null || payload === undefined) return
@@ -2251,7 +2251,7 @@ function payloadSignature (value) {
 
 /**
  * 安装待办载荷：内容没变就整条丢弃。
- * @param pending - `{ questions, approvals }`，可能来自 `/api/state` 或 `pending` 事件。
+ * @param pending - `{ questions, approvals }`，可能来自 `/remote/api/state` 或 `pending` 事件。
  */
 function installPending (pending) {
   const next = pending ?? { questions: [], approvals: [] }
@@ -2274,14 +2274,14 @@ function installTelemetry (bySession) {
 
 /**
  * Run one session-management action against the Host.
- * @param path - route under `/api/session/`.
+ * @param path - route under `/remote/api/session/`.
  * @param body - its JSON body.
  * @returns the Host reply, or undefined after surfacing the error.
  */
 async function manage (path, body) {
   state.actionError = ''
   try {
-    const payload = await api(`/api/session/${path}`, { method: 'POST', body })
+    const payload = await api(`/remote/api/session/${path}`, { method: 'POST', body })
     installManagement(payload)
     // Re-read the list so titles, ordering, and pinned/archived rows all agree with the Host.
     await loadState()
@@ -2334,7 +2334,7 @@ export async function setArchived (sessionId, archived, stopActivity = false) {
  */
 export async function loadPresets () {
   try {
-    const payload = await api('/api/presets')
+    const payload = await api('/remote/api/presets')
     state.presets = Array.isArray(payload.presets) ? payload.presets : []
   } catch {
     state.presets = []
@@ -2349,7 +2349,7 @@ export async function loadPresets () {
 export async function createSession (options) {
   state.actionError = ''
   try {
-    const payload = await api('/api/session/create', { method: 'POST', body: options })
+    const payload = await api('/remote/api/session/create', { method: 'POST', body: options })
     await loadState()
     return typeof payload.sessionId === 'string' ? payload.sessionId : undefined
   } catch (error) {

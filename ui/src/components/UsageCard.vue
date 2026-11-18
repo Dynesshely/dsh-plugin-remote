@@ -29,7 +29,7 @@ import { t } from '../lib/i18n.js'
 /**
  * 余额与用量卡片。
  *
- * 数据全部来自宿主 `/api/usage`（跨域请求与密钥都在 Host 侧），这里只负责画：
+ * 数据全部来自宿主 `/remote/api/usage`（跨域请求与密钥都在 Host 侧），这里只负责画：
  *  - **详情视图（默认）**：顶部是余额 tile；所有「限额类」渠道共用**一个 slot**，一次显示一个，
  *    左右滑动/箭头切换，带 `2 / 5` 页码与渠道名 —— 渠道再多也不会把卡片撑长。
  *  - **总览视图（右键或右上角小按钮切换）**：每个上游一张卡片，按实际窗口数平铺圆环（`flex-wrap`），
@@ -364,7 +364,7 @@ async function load () {
   loading.value = true
   error.value = ''
   try {
-    const payload = await api('/api/usage')
+    const payload = await api('/remote/api/usage')
     items.value = Array.isArray(payload.items) ? payload.items : []
     source.value = String(payload.source ?? '')
     if (payload.error !== undefined && payload.error !== null) error.value = String(payload.error)

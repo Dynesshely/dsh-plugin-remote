@@ -327,8 +327,8 @@ async function readBuffer (request, limit) {
 export async function handleFiles (api) {
   const pathname = api.url.pathname
   const method = api.request.method ?? 'GET'
-  if (!pathname.startsWith('/api/files')) return false
-  if (method === 'GET' && pathname === '/api/files/raw') {
+  if (!pathname.startsWith('/remote/api/files')) return false
+  if (method === 'GET' && pathname === '/remote/api/files/raw') {
     const workspaceId = api.url.searchParams.get('workspaceId') ?? ''
     const rootInfo = await resolveRoot(api, workspaceId)
     if (rootInfo === undefined) {
@@ -340,7 +340,7 @@ export async function handleFiles (api) {
   }
   // 二进制上传：请求体就是文件字节，绕开 data URL + JSON 那一整条主线程上的字符串路径。
   // 旧写法（`action: 'upload'` 加 data URL）保留在 `mutate` 里，老页面/旧链接照旧可用。
-  if (method === 'POST' && pathname === '/api/files/upload') {
+  if (method === 'POST' && pathname === '/remote/api/files/upload') {
     const workspaceId = api.url.searchParams.get('workspaceId') ?? ''
     const rootInfo = await resolveRoot(api, workspaceId)
     if (rootInfo === undefined) {
@@ -386,7 +386,7 @@ export async function handleFiles (api) {
       return true
     }
     const relative = api.url.searchParams.get('path') ?? ''
-    const result = pathname === '/api/files/text' ? preview(rootInfo, relative) : listing(rootInfo, relative)
+    const result = pathname === '/remote/api/files/text' ? preview(rootInfo, relative) : listing(rootInfo, relative)
     api.json(result.status, result.body)
     return true
   }

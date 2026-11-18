@@ -905,7 +905,7 @@ async function uploadOne (file) {
   const query = new URLSearchParams({ workspaceId: workspaceId.value, path: target })
   let response
   try {
-    response = await fetch(`/api/files/upload?${query.toString()}`, {
+    response = await fetch(`/remote/api/files/upload?${query.toString()}`, {
       method: 'POST',
       // 自定义头让跨源请求必须走预检，宿主不会放行；同源请求不受影响。
       headers: { 'x-rc': '1' },

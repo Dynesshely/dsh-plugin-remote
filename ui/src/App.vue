@@ -306,6 +306,13 @@ async function submitToken () {
   try {
     await login(token.value.trim())
     token.value = ''
+    // The root route sends unauthenticated readers here with the page they wanted in `next`; honour it so a visit
+    // to `/` costs one token entry rather than two navigations.
+    const next = new URLSearchParams(window.location.search).get('next')
+    if (next !== null && next.startsWith('/') && !next.startsWith('//')) {
+      window.location.replace(next)
+      return
+    }
     await loadState()
     void loadModels()
   } catch (error) {

@@ -236,7 +236,7 @@ async function workspaceRepositories (api, workspaceId) {
  */
 export async function handleGitRepos (api) {
   if (api.request.method !== 'GET') return false
-  if (api.url.pathname !== '/api/git/repos') return false
+  if (api.url.pathname !== '/remote/api/git/repos') return false
   const workspaceId = api.url.searchParams.get('workspaceId') ?? ''
   const tree = await api.workspaceTree()
   const list = Array.isArray(tree) ? tree : []
@@ -277,7 +277,7 @@ export async function handleGitRepos (api) {
  */
 export async function handleGit (api) {
   if (api.request.method !== 'GET') return false
-  if (api.url.pathname !== '/api/git/status') return false
+  if (api.url.pathname !== '/remote/api/git/status') return false
   const workspace = await choseWorkspace(api, api.url.searchParams.get('workspaceId') ?? '')
   const requested = api.url.searchParams.get('repo') ?? ''
   const path = String(workspace?.path ?? '')
@@ -326,7 +326,7 @@ export async function handleGit (api) {
  */
 export async function handleGitDiff (api) {
   if (api.request.method !== 'GET') return false
-  if (api.url.pathname !== '/api/git/diff') return false
+  if (api.url.pathname !== '/remote/api/git/diff') return false
   const target = api.url.searchParams.get('path') ?? ''
   if (target === '') {
     api.json(400, { error: 'path is required' })

@@ -8,7 +8,7 @@ import AppIcon from './AppIcon.vue'
  * 消息里的一条文件引用，渲染成一行卡片（类似桌面端的文件条目）。
  *
  * 左侧是缩略图或类型图标，中间是文件名 + 一行说明，右侧是主操作（预览）与下拉菜单。
- * 预览走页面内的轻量浮层，不新开标签页；缩略图走宿主的 `/api/image?path=`，同一条消息里同一路径
+ * 预览走页面内的轻量浮层，不新开标签页；缩略图走宿主的 `/remote/api/image?path=`，同一条消息里同一路径
  * 只出现一张卡片，所以这里不需要再去重，也不会重复请求。卡片不做任何 DOM 测量。
  */
 const props = defineProps({
@@ -52,13 +52,13 @@ const description = computed(() => {
 })
 
 /** 缩略图与预览都走同一条宿主图片路由。 */
-const imageUrl = computed(() => `/api/image?${new URLSearchParams({ path: path.value }).toString()}`)
+const imageUrl = computed(() => `/remote/api/image?${new URLSearchParams({ path: path.value }).toString()}`)
 
 /** 下载地址：图片走图片路由，其它类型走宿主原始字节路由（需要当前工作区）。 */
 const downloadUrl = computed(() => {
   if (isImage.value) return imageUrl.value
   const workspaceId = selectedSession.value?.workspaceId ?? ''
-  return `/api/files/raw?${new URLSearchParams({ workspaceId, path: path.value }).toString()}`
+  return `/remote/api/files/raw?${new URLSearchParams({ workspaceId, path: path.value }).toString()}`
 })
 
 /** 收起菜单（点外部、Esc、任何一次操作之后都调用）。 */
