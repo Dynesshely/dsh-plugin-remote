@@ -1,5 +1,6 @@
 import { request as httpRequest } from 'node:http'
 import { connect as netConnect } from 'node:net'
+import { overlayMarkup } from './overlay.js'
 
 /**
  * Reverse proxy for the DeepSeek Harness Web GUI.
@@ -30,9 +31,6 @@ import { connect as netConnect } from 'node:net'
  * The label carries both languages rather than reading the page's locale: this element is the only thing here that
  * does not belong to DSH, and a stuck label is worse than a slightly redundant one.
  */
-const BACK_LINK = '<a id="rc-back" href="/remote/" title="返回远程控制" style="position:fixed;right:16px;bottom:16px;z-index:2147483647;display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:9999px;background:rgba(18,18,20,0.82);color:#fff;font:500 12px/1 system-ui,-apple-system,Segoe UI,sans-serif;text-decoration:none;letter-spacing:0.01em;box-shadow:0 6px 20px rgba(0,0,0,0.38);border:1px solid rgba(255,255,255,0.16);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">'
-  + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>'
-  + '<span>远程控制 · Remote</span></a>'
 
 /** Query key DSH reads the launch token from. */
 const TOKEN_QUERY = 'token'
@@ -223,8 +221,8 @@ export function createDshProxy (options) {
       reply.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8')
         const patched = body.includes('</body>')
-          ? body.replace('</body>', `${BACK_LINK}</body>`)
-          : `${body}${BACK_LINK}`
+          ? body.replace('</body>', `${overlayMarkup()}</body>`)
+          : `${body}${overlayMarkup()}`
         const payload = Buffer.from(patched, 'utf8')
         delete headers['content-length']
         headers['content-length'] = String(payload.byteLength)

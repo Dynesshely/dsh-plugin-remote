@@ -740,7 +740,7 @@ function serveStatic (request, response, url) {
     // The shell needs its own bundle plus inline styles; everything else stays blocked.
     // `frame-src`/`object-src` are for the file browser's previews: a PDF or a video is shown in a
     // same-origin frame, which `default-src 'none'` would otherwise refuse.
-    'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; frame-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; frame-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
   })
   response.end(payload)
 }

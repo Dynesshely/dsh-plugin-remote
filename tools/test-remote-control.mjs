@@ -311,7 +311,9 @@ await check('serves the shell with a strict CSP and no auth', async () => {
   assert.equal(response.status, 200)
   const csp = response.headers.get('content-security-policy') ?? ''
   assert.match(csp, /default-src 'none'/u)
-  assert.match(csp, /frame-ancestors 'none'/u)
+  assert.match(csp, // `'self'` rather than `'none'`: the split view on the proxied page frames this page, and that is the same origin.
+      // A foreign site still cannot.
+      /frame-ancestors 'self'/u)
   const html = await response.text()
   if (hasDist) assert.match(html, /<div id="app"/u)
   else assert.match(html, /DSH 遥控/u)
