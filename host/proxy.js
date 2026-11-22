@@ -1,4 +1,4 @@
-import { request as httpRequest } from 'node:http'
+import { Agent, request as httpRequest } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import { overlayMarkup } from './overlay.js'
 
@@ -117,6 +117,21 @@ export function createDshProxy (options) {
   let pending
   /** Last upstream failure, exposed for diagnostics. */
   let failure
+  /**
+   * Connection pool for upstream HTTP requests.
+   *
+   * Bounded and kept alive on purpose. Each proxied request used to open its own socket straight out of the global
+   * agent, and a page that opens a burst of requests left a matching burst of sockets behind — thousands of them,
+   * half established against the upstream port and half sitting bound on ephemeral ports. Reuse with a hard cap is
+   * what keeps that flat.
+   */
+  const agent = new Agent({
+    keepAlive: true,
+    keepAliveMsecs: 15_000,
+    maxSockets: 32,
+    maxFreeSockets: 8,
+    timeout: 60_000,
+  })
 
   /**
    * Exchange the launch token for a DSH cookie.
@@ -137,6 +152,7 @@ export function createDshProxy (options) {
         path: `${target.pathname}${target.search}`,
         method: 'GET',
         headers: { host: target.host },
+        agent,
       }, (response) => {
         const values = response.headers['set-cookie']
         response.resume()
@@ -198,6 +214,7 @@ export function createDshProxy (options) {
       port: target.port,
       path: `${pathname}${search}`,
       method: request.method,
+      agent,
       headers: upstreamHeaders(request.headers, authority, current, `${target.protocol}//${target.host}`),
     }, (reply) => {
       const headers = {}
@@ -275,12 +292,20 @@ export function createDshProxy (options) {
       host: target.hostname,
       port: Number(target.port === '' ? 80 : target.port),
     })
+    // If the upstream never answers the handshake, both sockets would stay open with nothing to read. A deadline
+    // closes them together and the browser's own reconnect takes over.
+    const deadline = setTimeout(() => {
+      upstream.destroy()
+      socket.destroy()
+    }, 15_000)
     upstream.on('error', (error) => {
+      clearTimeout(deadline)
       failure = String(error?.message ?? error)
       logger?.warn?.(`[remote-control] proxy upgrade failed: ${failure}`)
       socket.destroy()
     })
     upstream.on('connect', () => {
+      clearTimeout(deadline)
       const headers = {
         ...upstreamHeaders(request.headers, target.host, current, `${target.protocol}//${target.host}`),
         connection: 'Upgrade',
@@ -296,7 +321,10 @@ export function createDshProxy (options) {
       upstream.pipe(socket)
       socket.pipe(upstream)
     })
-    socket.on('error', () => upstream.destroy())
+    socket.on('error', () => {
+      clearTimeout(deadline)
+      upstream.destroy()
+    })
     upstream.on('close', () => socket.destroy())
     socket.on('close', () => upstream.destroy())
     return true
