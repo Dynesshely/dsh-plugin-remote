@@ -1,4 +1,4 @@
-import { Agent, request as httpRequest } from 'node:http'
+import { request as httpRequest } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import { overlayMarkup } from './overlay.js'
 
@@ -117,21 +117,6 @@ export function createDshProxy (options) {
   let pending
   /** Last upstream failure, exposed for diagnostics. */
   let failure
-  /**
-   * Connection pool for upstream HTTP requests.
-   *
-   * Bounded and kept alive on purpose. Each proxied request used to open its own socket straight out of the global
-   * agent, and a page that opens a burst of requests left a matching burst of sockets behind — thousands of them,
-   * half established against the upstream port and half sitting bound on ephemeral ports. Reuse with a hard cap is
-   * what keeps that flat.
-   */
-  const agent = new Agent({
-    keepAlive: true,
-    keepAliveMsecs: 15_000,
-    maxSockets: 32,
-    maxFreeSockets: 8,
-    timeout: 60_000,
-  })
 
   /**
    * Exchange the launch token for a DSH cookie.
@@ -152,7 +137,6 @@ export function createDshProxy (options) {
         path: `${target.pathname}${target.search}`,
         method: 'GET',
         headers: { host: target.host },
-        agent,
       }, (response) => {
         const values = response.headers['set-cookie']
         response.resume()
@@ -214,7 +198,6 @@ export function createDshProxy (options) {
       port: target.port,
       path: `${pathname}${search}`,
       method: request.method,
-      agent,
       headers: upstreamHeaders(request.headers, authority, current, `${target.protocol}//${target.host}`),
     }, (reply) => {
       const headers = {}
