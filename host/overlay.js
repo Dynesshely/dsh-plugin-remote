@@ -54,6 +54,10 @@ export function overlayMarkup () {
   <button type="button" data-rc-mode="horizontal" role="menuitemradio" aria-checked="false" style="display:flex;width:100%;align-items:center;gap:8px;padding:8px 10px;border:0;border-radius:9px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer"><span data-rc-dot style="width:12px;text-align:center;color:#7c8cff"></span><span style="flex:1">水平切分</span></button>
   <div style="height:1px;margin:6px 8px;background:rgba(255,255,255,0.12)"></div>
   <button type="button" data-rc-swap role="menuitem" style="display:flex;width:100%;align-items:center;gap:8px;padding:8px 10px;border:0;border-radius:9px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer"><span style="width:12px;text-align:center;color:#7c8cff">⇄</span><span style="flex:1">交换切分</span></button>
+  <div style="height:1px;margin:6px 8px;background:rgba(255,255,255,0.12)"></div>
+  <!-- Restarting takes this page down with it, so the label is the confirmation: it changes on the first click
+       and only a second click acts. Same two-step shape as the plugin page's own menu. -->
+  <button type="button" data-rc-restart role="menuitem" style="display:flex;width:100%;align-items:center;gap:8px;padding:8px 10px;border:0;border-radius:9px;background:transparent;color:#ff8f8f;font:inherit;text-align:left;cursor:pointer"><span style="width:12px;text-align:center">⟳</span><span style="flex:1" data-rc-restart-label>重启 DSH</span></button>
 </div>
 
 <script>(function () {
@@ -127,6 +131,53 @@ export function overlayMarkup () {
     }
   }
 
+  /** Pending restart confirmation; the first click only arms it. */
+  var restartArmed = false
+  var restartTimer
+
+  /**
+   * @param item - the restart menu entry.
+   * @returns nothing.
+   *
+   * Restarting this Host closes the page that asked for it, so it must never happen on one click. The first click
+   * turns the label into a question and starts a countdown; the second click within three seconds performs it. Any
+   * other interaction cancels, because a menu the reader has moved on from should not stay armed.
+   */
+  function requestRestart (item) {
+    var label = item.querySelector('[data-rc-restart-label]')
+    if (label === null) return
+    if (!restartArmed) {
+      restartArmed = true
+      label.textContent = '确认重启 DSH？'
+      item.style.background = 'rgba(255,90,90,0.18)'
+      restartTimer = setTimeout(function () {
+        restartArmed = false
+        label.textContent = '重启 DSH'
+        item.style.background = 'transparent'
+      }, 3000)
+      return
+    }
+
+    restartArmed = false
+    if (restartTimer !== undefined) clearTimeout(restartTimer)
+    label.textContent = '正在重启…'
+    item.style.background = 'rgba(255,90,90,0.28)'
+    // The cookie this page already holds authorizes the call; the Host watches the port back so it can tell the
+    // difference between "did not come back" and "came back but this page never noticed".
+    fetch('/remote/api/dsh/restart', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ port: Number(window.location.port) || 19400 }),
+    }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      label.textContent = '已发出，等待重启…'
+    }).catch(function (error) {
+      label.textContent = '重启失败：' + (error && error.message ? error.message : String(error))
+      item.style.background = 'rgba(255,90,90,0.18)'
+    })
+  }
+
   /** @param x - viewport x. @param y - viewport y. */
   function openMenu (x, y) {
     menu.style.display = 'block'
@@ -143,6 +194,14 @@ export function overlayMarkup () {
   function closeMenu () {
     menu.style.display = 'none'
     menu.setAttribute('aria-hidden', 'true')
+    if (restartArmed) {
+      restartArmed = false
+      if (restartTimer !== undefined) clearTimeout(restartTimer)
+      var label = menu.querySelector('[data-rc-restart-label]')
+      var entry = menu.querySelector('[data-rc-restart]')
+      if (label !== null) label.textContent = '重启 DSH'
+      if (entry !== null) entry.style.background = 'transparent'
+    }
   }
 
   /** @param event - a contextmenu event from any overlay handle. */
@@ -172,6 +231,10 @@ export function overlayMarkup () {
       paint()
       return
     }
+    if (item.hasAttribute('data-rc-restart')) {
+      requestRestart(item)
+      return
+    }
     setMode(item.getAttribute('data-rc-mode'))
     closeMenu()
   })
@@ -179,6 +242,8 @@ export function overlayMarkup () {
   menu.addEventListener('mouseover', function (event) {
     var target = event.target
     if (!(target instanceof Element)) return
+    // The restart entry owns its own background (red while armed), so hover must not overwrite it.
+    if (target.closest('[data-rc-restart]') !== null) return
     var item = target.closest('[data-rc-mode],[data-rc-swap]')
     if (item !== null) item.style.background = item.getAttribute('aria-checked') === 'true'
       ? 'rgba(124,140,255,0.24)'
@@ -187,6 +252,7 @@ export function overlayMarkup () {
   menu.addEventListener('mouseout', function (event) {
     var target = event.target
     if (!(target instanceof Element)) return
+    if (target.closest('[data-rc-restart]') !== null) return
     var item = target.closest('[data-rc-mode],[data-rc-swap]')
     if (item !== null) item.style.background = item.getAttribute('aria-checked') === 'true'
       ? 'rgba(124,140,255,0.18)'
